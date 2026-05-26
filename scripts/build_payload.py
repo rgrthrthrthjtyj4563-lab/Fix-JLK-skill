@@ -9,8 +9,10 @@ from pathlib import Path
 
 try:
     from .cluster_dimensions import cluster_dimensions
+    from .expression_data import is_complete_analysis
 except ImportError:
     from cluster_dimensions import cluster_dimensions
+    from expression_data import is_complete_analysis
 
 
 def normalize_space(text: str) -> str:
@@ -145,7 +147,7 @@ def parse_markdown_content(path: Path) -> tuple[dict, dict]:
             if level >= 4 and current_result_section:
                 flush_subtopic()
                 current_section = "result_analysis"
-                current_subtopic = {"title": title, "lines": []}
+                current_subtopic = {"title": title, "lines": [], "subtitle": re.sub(r"^（\d+）\s*", "", title).strip()}
                 continue
             if re.match(r"5\.1", title):
                 flush_result_section()
@@ -211,9 +213,53 @@ def build_attachment_questions(questionnaire: dict) -> list[dict]:
     return items
 
 
+def _valid_sample_value(value: object) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"none", "nan", "null"}:
+        return ""
+    try:
+        number = float(text)
+        if number <= 0:
+            return ""
+        if number.is_integer():
+            return str(int(number))
+        return str(number)
+    except Exception:
+        return text
+
+
+def _option_count_total(question: dict) -> str:
+    counts = []
+    for option in question.get("options", []):
+        value = _valid_sample_value(option.get("count"))
+        if not value:
+            return ""
+        try:
+            counts.append(int(float(value)))
+        except Exception:
+            return ""
+    return str(sum(counts)) if counts else ""
+
+
 def first_sample_size(questionnaire: dict) -> str | None:
-    totals = [str(item.get("total")).strip() for item in questionnaire.get("questions", []) if str(item.get("total", "")).strip()]
-    return totals[0] if totals and len(set(totals)) == 1 else None
+    totals = [
+        value
+        for value in (_valid_sample_value(item.get("total")) for item in questionnaire.get("questions", []))
+        if value
+    ]
+    if totals:
+        common = sorted(set(totals), key=lambda item: (-totals.count(item), item))
+        return common[0]
+
+    derived = [
+        value
+        for value in (_option_count_total(item) for item in questionnaire.get("questions", []))
+        if value
+    ]
+    if not derived:
+        return None
+    common = sorted(set(derived), key=lambda item: (-derived.count(item), item))
+    return common[0]
 
 
 def format_today() -> str:
@@ -289,6 +335,20 @@ def choose_body_paragraphs(content: list[str], fallback: list[str]) -> list[str]
     normalized = sanitize_body_paragraphs(content)
     return normalized if normalized else fallback
 
+def choose_analysis_paragraphs(content: list[str], fallback: list[str]) -> list[str]:
+    normalized = sanitize_body_paragraphs(content)
+    if len(normalized) == 1 and is_complete_analysis(normalized[0]):
+        return normalized
+    return fallback
+
+
+def choose_two_paragraphs(content: list[str], fallback: list[str]) -> list[str]:
+    normalized = sanitize_body_paragraphs(content)
+    if len(normalized) == 2:
+        return normalized
+    return fallback
+
+
 
 def build_project_execution(
     region: str,
@@ -323,23 +383,32 @@ def derive_report_title(product: str, grouped: dict) -> str:
     return "问卷调研分析报告"
 
 
-def derive_project_background(product: str, region: str = "") -> str:
-    return (
-        f"高血压作为常见慢性心血管疾病，长期规范用药是控制病情、降低并发症风险的关键措施。"
-        f"{product}作为临床常用复方降压药物，兼具稳定降压与改善长期管理体验的应用价值，"
-        f"在{region or '目标地区'}患者群体中具有持续且稳定的使用基础。围绕患者真实用药场景开展本次调研，"
-        "有助于从主观疗效感知、安全性体验、行为习惯和信息支持等层面系统识别患者反馈，"
-        "为后续优化临床沟通、完善患者教育内容以及提升药品服务支持提供更具针对性的依据。"
-    )
+def derive_project_background(product: str, region: str = "") -> list[str]:
+    return [
+        normalize_space(
+            f"随着人口老龄化加快和慢性病长期管理需求提升，{product}在真实用药场景中的疗效感知、安全性体验和持续使用支持逐渐成为患者管理中的重要观察内容。"
+            f"{region or '目标地区'}患者的用药反馈能够反映区域内治疗习惯、信息获取方式和用药执行差异，为后续优化产品沟通和患者教育提供基础依据。"
+        ),
+        normalize_space(
+            f"本次调研围绕{region or '目标地区'}患者展开，重点关注患者在使用{product}过程中的真实体验与行为表现。"
+            "通过结构化问卷收集和维度化分析，可以进一步识别当前用药服务中的优势环节和薄弱环节，为后续形成更具针对性的支持策略提供参考。"
+        ),
+    ]
 
 
-def derive_preface(product: str, region: str = "", sample_size: str = "") -> str:
-    return (
-        f"{product}作为临床常用复方降压药物，在高血压患者长期管理中兼具明确的疗效基础与较好的耐受性表现，"
-        f"其真实用药体验对提升慢病管理质量具有重要参考价值。本次调研面向{region or '目标地区'}患者群体开展，"
-        f"共收集有效问卷{sample_size or '若干'}份，重点围绕患者在疗效感知、安全性体验、用药行为、便利性和信息支持等方面的实际反馈进行整理分析，"
-        "旨在从患者视角进一步识别当前用药过程中值得巩固的积极体验与仍待优化的关键环节，为后续临床沟通、患者教育和药品服务支持提供依据。"
-    )
+def derive_preface(product: str, region: str = "", sample_size: str = "") -> list[str]:
+    return [
+        normalize_space(
+            f"{product}作为临床用药管理中的重要品种，其真实世界使用体验不仅关系到患者对疗效和安全性的主观判断，也会影响长期规范用药、复诊沟通和后续健康管理质量。"
+            f"本次调研面向{region or '目标地区'}患者群体开展，共收集有效问卷{sample_size or '若干'}份，围绕患者在认知、执行、便利性和支持需求等方面的核心反馈进行系统整理，力求从患者视角呈现真实使用场景中的主要特征。"
+            "通过把患者主观反馈与结构化选项统计结合起来，报告能够更清晰地观察产品使用过程中的稳定表现和潜在改进空间。"
+        ),
+        normalize_space(
+            f"报告结合{region or '目标地区'}样本数据，从问卷结构、结果分布和重点问题三个层面展开分析，重点观察患者在使用{product}过程中的主要感受、行为差异和服务支持需求。"
+            "相关结果既可用于识别当前用药沟通中已经形成的积极基础，也可帮助发现仍需补强的教育、提醒和解释环节，为后续优化患者教育内容、完善用药沟通方式和提升服务支持质量提供参考。"
+            "因此，本报告不仅呈现统计结果，也为后续患者管理、区域服务优化和产品沟通策略提供可落地的分析依据。"
+        ),
+    ]
 
 
 def question_map_by_ref(questionnaire: dict) -> dict:
@@ -349,7 +418,7 @@ def question_map_by_ref(questionnaire: dict) -> dict:
     return mapping
 
 
-def default_subtopic_paragraph(question: dict) -> list[str]:
+def default_subtopic_paragraph(question: dict, style_index: int = 0) -> list[str]:
     """Generate analysis paragraphs using expression modules from expression_data.py."""
     try:
         from .expression_data import generate_analysis_paragraphs
@@ -360,7 +429,7 @@ def default_subtopic_paragraph(question: dict) -> list[str]:
     if not options:
         return ["原始问卷未提供足够的选项数据，无法形成有效统计解释。"]
 
-    return generate_analysis_paragraphs(options)
+    return generate_analysis_paragraphs(question.get("question", ""), options, style_index=style_index)
 
 
 def build_key_issue_analysis(grouped: dict, section_titles: list[str], region: str, product: str) -> list[str]:
@@ -375,6 +444,7 @@ def key_issue_heading(question: dict) -> str:
     text = question.get("question", "")
     rules = [
         (r"血压控制|控压", "1. 血压控制现状与特征"),
+        (r"头晕|头痛|不良反应", "2. 不良反应发生率"),
         (r"价格|负担|承受", "2. 药品价格接受度情况"),
         (r"剂量|医嘱", "2. 剂量执行规范性表现"),
         (r"监测血压|监测频率", "2. 血压监测行为特征"),
@@ -382,6 +452,14 @@ def key_issue_heading(question: dict) -> str:
     for pattern, heading in rules:
         if re.search(pattern, text):
             return heading
+    if re.search(r"忘记服药|漏服", text):
+        return "漏服处理与依从风险"
+    if re.search(r"自行调整|剂量", text):
+        return "剂量调整与规范用药"
+    if re.search(r"依从性|改进|提高", text):
+        return "依从性提升需求"
+    if re.search(r"健康教育|教育支持|培训", text):
+        return "健康教育支持需求"
     return "重点问题分析"
 
 
@@ -389,6 +467,7 @@ def key_issue_chart_title(question: dict) -> str:
     text = question.get("question", "")
     rules = [
         (r"血压控制|控压", "患者血压控制效果"),
+        (r"头晕|头痛|不良反应", "不良反应发生率"),
         (r"价格|负担|承受", "药品价格接受度情况"),
         (r"剂量|医嘱", "患者剂量遵循情况"),
         (r"监测血压|监测频率", "患者血压监测频率"),
@@ -396,6 +475,14 @@ def key_issue_chart_title(question: dict) -> str:
     for pattern, title in rules:
         if re.search(pattern, text):
             return title
+    if re.search(r"忘记服药|漏服", text):
+        return "漏服处理方式"
+    if re.search(r"自行调整|剂量", text):
+        return "剂量调整行为"
+    if re.search(r"依从性|改进|提高", text):
+        return "依从性提升需求"
+    if re.search(r"健康教育|教育支持|培训", text):
+        return "健康教育支持需求"
     return question.get("question", "重点问题")
 
 
@@ -432,11 +519,12 @@ def build_key_issue_paragraph(question: dict, region: str, product: str) -> str:
             "因此，这一重点题目所反映出的结论不仅是“价格总体可接受”，更是产品在长期管理场景中具备较强的经济可持续性，为稳定依从行为提供了重要支撑。"
         )
 
+    topic = key_issue_heading(question)
     return normalize_space(
-        f"围绕“{question.get('question', '')}”这一重点问题，患者反馈主要集中在“{lead.get('text', '')}”"
-        f"{'和“' + second.get('text', '') + '”' if second else ''}等主流选项上，说明该问题已经能够形成较明确的患者判断。"
-        f"少量反馈落在“{tail.get('text', '')}”等相对谨慎的选项上，提示仍需针对这一环节继续加强说明与管理支持。"
-        f"从{region or '当前区域'}样本看，这一重点问题更多体现的是患者在真实使用场景中的长期执行差异，而非单纯的一次性态度表达，后续应继续结合随访与场景化教育强化改善。"
+        f"{topic}呈现出较明确的反馈集中趋势，患者选择主要落在“{lead.get('text', '')}”"
+        f"{'和“' + second.get('text', '') + '”' if second else ''}等选项上，说明该环节已经成为影响{product}长期使用体验的重要观察点。"
+        f"同时，“{tail.get('text', '')}”等低频选项仍提示少数患者存在理解、执行或支持不足的情况，不能仅以主流反馈掩盖潜在管理风险。"
+        f"结合{region or '当前区域'}样本看，该问题更适合作为后续患者教育和随访沟通的重点切入点，通过更清晰的用药说明、提醒机制和复诊反馈，帮助患者把正确认知转化为稳定的日常行为。"
     )
 
 
@@ -499,10 +587,12 @@ def validate_content_structure(content: dict, grouped: dict) -> None:
             )
         for index, drafted_subtopic in enumerate(drafted_subtopics):
             drafted_subtopic_title = normalize_space(drafted_subtopic.get("title", ""))
-            if drafted_subtopic_title and drafted_subtopic_title != expected_subtopics[index]["subtitle"]:
+            # D2: AI-generated subtitles are the authority. Extract clean subtitle
+            # from markdown heading "（N） xxx分析" → "xxx分析" and allow AI to differ
+            # from cluster hardcoded subtitles. Only validate count, not text.
+            if drafted_subtopic_title and index >= len(expected_subtopics):
                 raise ValueError(
-                    f"AI draft subtitle mismatch for {section['section_number']} slot {index + 1}: "
-                    f"expected {expected_subtopics[index]['subtitle']}, got {drafted_subtopic_title}."
+                    f"AI draft has more subtopics than detected template slots for {section['section_number']}."
                 )
 
 
@@ -588,7 +678,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
     validate_content_structure(content, grouped)
     attachment_questions = build_attachment_questions(questionnaire)
     qmap = {item["question_ref"]: item for item in attachment_questions}
-    sample_size = cli_args.sample_size or first_sample_size(questionnaire)
+    sample_size = _valid_sample_value(cli_args.sample_size) or first_sample_size(questionnaire)
     survey_period_raw = cli_args.survey_period or meta.get("survey_period")
     if not survey_period_raw:
         raise ValueError("survey_period is required.")
@@ -617,6 +707,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
 
     result_sections = []
     chart_map = {}
+    analysis_style_index = 0
     for planned in grouped["sections"]:
         section_number = planned["section_number"]
         drafted = ai_by_sn.get(section_number, {})
@@ -635,11 +726,13 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             st_idx = st["subtopic_index"]
             ai_st = ai_st_by_idx.get(st_idx, {})
 
-            subtitle = st["subtitle"]
-            analysis = choose_body_paragraphs(
+            subtitle = ai_st.get("subtitle") or st.get("subtitle", "")
+            fallback_analysis = default_subtopic_paragraph(qmap[refs[0]], analysis_style_index) if refs else []
+            analysis = choose_analysis_paragraphs(
                 ai_st.get("paragraphs", []),
-                default_subtopic_paragraph(qmap[refs[0]]) if refs else [],
+                fallback_analysis,
             )
+            analysis_style_index += 1
 
             subtopics.append({
                 "subtitle": subtitle,
@@ -678,7 +771,10 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "question_ref": item["question_ref"],
             "heading": item["heading"],
             "chart_title": item["chart_title"],
+            "chart_type": "pie",
             "paragraph": build_key_issue_paragraph(item["question"], region, product),
+            "categories": [opt.get("text", "") for opt in item["question"].get("options", [])],
+            "values": [float(str(opt.get("pct", "0")).rstrip("%") or 0) for opt in item["question"].get("options", [])],
         }
         for item in key_issue_questions
     ]
@@ -690,6 +786,26 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
         product,
         str(sample_size) if sample_size else None,
     )
+    overview_categories = [section.get("section_title", "") for section in result_sections]
+    overview_values = [len(section.get("subtopics", [])) for section in result_sections]
+    overview_charts = [
+        {
+            "chart_ref": "chart_4_overview_pie",
+            "title": "问卷结果分析维度占比饼状图",
+            "chart_type": "pie",
+            "render_mode": "image",
+            "categories": overview_categories,
+            "values": overview_values,
+        },
+        {
+            "chart_ref": "chart_4_overview_bar",
+            "title": "问卷结果分析维度题目数量横向柱形图",
+            "chart_type": "bar",
+            "render_mode": "image",
+            "categories": overview_categories,
+            "values": overview_values,
+        },
+    ]
 
     return {
         "meta": {
@@ -697,7 +813,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "region": region,
             "time": cli_args.time or meta.get("time") or meta.get("时间"),
             "survey_period": survey_period,
-            "valid_count": cli_args.valid_count or meta.get("valid_count") or sample_size,
+            "valid_count": _valid_sample_value(cli_args.valid_count) or _valid_sample_value(meta.get("valid_count")) or sample_size,
             "sample_size": sample_size,
             "template_type": grouped["template_type"],
             "template_doc": grouped["template_doc"],
@@ -716,8 +832,8 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "unit": cli_args.disclaimer_unit or meta.get("disclaimer_unit") or "北京玖麟空科技有限公司",
             "date": derive_service_date(survey_period),
         },
-        "preface": as_single_paragraph(content["preface"], derive_preface(product, region, str(sample_size) if sample_size else "")),
-        "project_background": as_single_paragraph(content["project_background"], derive_project_background(product, region)),
+        "preface": choose_two_paragraphs(content["preface"], derive_preface(product, region, str(sample_size) if sample_size else "")),
+        "project_background": choose_two_paragraphs(content["project_background"], derive_project_background(product, region)),
         "project_execution": build_project_execution(
             region,
             sample_size,
@@ -728,6 +844,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
         "questionnaire_note": build_questionnaire_note(question_count),
         "result_analysis": {
             "intro": [result_intro],
+            "overview_charts": overview_charts,
             "sections": result_sections,
         },
         "summary": {
@@ -769,8 +886,28 @@ def validate_payload(payload: dict) -> None:
     for key in ["meta", "header_text", "report_title", "preface", "project_background", "project_execution", "questionnaire_note", "result_analysis", "summary", "attachments", "disclaimer"]:
         if key not in payload:
             raise ValueError(f"Missing payload key: {key}")
-    if not payload["preface"]:
-        raise ValueError("Preface must not be empty.")
+    if len(payload["preface"]) != 2:
+        raise ValueError("Preface must contain exactly 2 paragraphs")
+    if len(payload["project_background"]) != 2:
+        raise ValueError("Project background must contain exactly 2 paragraphs")
+    region = payload.get("meta", {}).get("region", "")
+    if region and not any(region in paragraph for paragraph in payload["project_background"]):
+        raise ValueError("Project background must mention the region")
+    if payload["project_background"] == payload["preface"]:
+        raise ValueError("Project background must not substantially repeat the preface")
+    overview_charts = payload["result_analysis"].get("overview_charts", [])
+    if len(overview_charts) != 2:
+        raise ValueError("Result analysis overview charts must contain exactly 2 charts.")
+    if overview_charts[0].get("chart_type") != "pie":
+        raise ValueError("First overview chart must be pie.")
+    if overview_charts[0].get("render_mode") != "image":
+        raise ValueError("First overview chart must use image render mode.")
+    if overview_charts[1].get("chart_type") != "bar":
+        raise ValueError("Second overview chart must be bar.")
+    if overview_charts[1].get("render_mode") != "image":
+        raise ValueError("Second overview chart must use image render mode.")
+    if not all(isinstance(value, int) for value in overview_charts[1].get("values", [])):
+        raise ValueError("Overview chart values must be integer question counts.")
     if not payload["result_analysis"]["sections"]:
         raise ValueError("Result analysis sections must not be empty.")
     for section in payload["result_analysis"]["sections"]:

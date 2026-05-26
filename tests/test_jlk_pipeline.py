@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 import tempfile
 import unittest
+import copy
+import xml.etree.ElementTree as ET
 from datetime import date, datetime
 from pathlib import Path
 from collections import Counter
@@ -17,14 +19,53 @@ import sys
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.build_payload import build_payload, normalize_survey_period, parse_markdown_content, validate_payload
-from scripts.cluster_dimensions import cluster_dimensions
+from scripts.build_payload import (
+    build_payload,
+    derive_preface,
+    derive_project_background,
+    normalize_survey_period,
+    parse_markdown_content,
+    validate_payload,
+)
+from scripts.cluster_dimensions import EFFICACY_GROUPING, cluster_dimensions
+from scripts.expression_data import (
+    MAX_ANALYSIS_CHARS,
+    MIN_ANALYSIS_CHARS,
+    OPENING_STYLE_LIBRARY,
+    build_analysis_paragraph,
+    is_complete_analysis,
+)
+from scripts.final_validate_docx import FinalValidationError, validate_docx
+from scripts.parse_questionnaire import parse_sheet
 from scripts.render_from_template import TemplateRenderer
 
 
 class Namespace:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
+
+
+def analysis_opening(text: str) -> str:
+    match = re.match(r"^([^，。；;,.]{2,32})[，。；;,.]", str(text or ""))
+    if match:
+        return match.group(1)
+    return str(text or "")[:16]
+
+
+def expected_result_table_questions(payload: dict) -> list[str]:
+    qmap = {
+        question["question_ref"]: question["question"]
+        for question in payload["attachments"]["attachment1_questions"]
+    }
+    expected: list[str] = []
+    seen: set[str] = set()
+    for section in payload["result_analysis"]["sections"]:
+        for subtopic in section["subtopics"]:
+            for question_ref in subtopic["question_refs"]:
+                if question_ref in qmap and question_ref not in seen:
+                    expected.append(qmap[question_ref])
+                    seen.add(question_ref)
+    return expected
 
 
 def efficacy_questionnaire() -> dict:
@@ -63,6 +104,36 @@ def efficacy_questionnaire() -> dict:
     return {"question_count": len(data), "questions": data}
 
 
+def adherence_questionnaire() -> dict:
+    questions = [
+        "您对心达康胶囊作用的了解程度如何？",
+        "您获取心达康胶囊相关信息的主要来源是什么？",
+        "您忘记服药后通常会怎么做？",
+        "您是否会记录每日服药情况？",
+        "您通常通过什么方式提醒自己服药？",
+        "您是否能够坚持规律服用心达康胶囊？",
+        "您是否愿意参加心达康胶囊相关健康教育活动？",
+        "您希望获得哪些形式的健康教育支持？",
+    ]
+    options = [
+        ("A", "非常了解", "410", "41.00%"),
+        ("B", "比较了解", "360", "36.00%"),
+        ("C", "一般了解", "180", "18.00%"),
+        ("D", "不了解", "50", "5.00%"),
+    ]
+    data = []
+    for i, q in enumerate(questions, start=1):
+        data.append(
+            {
+                "number": i,
+                "question": q,
+                "total": "1000",
+                "options": [{"label": a, "text": b, "count": c, "pct": d} for a, b, c, d in options],
+            }
+        )
+    return {"question_count": len(data), "questions": data}
+
+
 def sample_markdown() -> str:
     return """---
 product: 厄贝沙坦氢氯噻嗪片
@@ -76,11 +147,15 @@ disclaimer_unit: 北京玖麟空科技有限公司
 
 ## 前言
 
-本次患者调研围绕厄贝沙坦氢氯噻嗪片的真实使用场景展开，重点收集患者在疗效感知、安全性体验以及长期管理行为等方面的反馈，为后续优化临床沟通和患者支持提供参考。
+高血压作为我国常见慢性非传染性疾病之一，其长期规范管理对于降低心脑血管并发症风险、改善患者生活质量具有重要意义。厄贝沙坦氢氯噻嗪片作为临床常用复方降压药物，在稳定控压、简化治疗方案及提升长期管理可执行性方面具有较明确的应用价值。随着患者对疗效感知、安全性体验和持续用药支持要求不断提高，仅依赖传统临床观察已难以全面反映真实使用场景中的需求差异。
+
+本次调研聚焦北京市使用厄贝沙坦氢氯噻嗪片的患者群体，共收集有效问卷1789份，围绕药品疗效、安全性、用药行为、便利性、经济性、可及性及信息支持等核心维度展开系统分析，旨在从患者视角识别真实用药过程中的优势表现与待优化环节，同时关注区域化支持需求差异。通过对区域样本反馈的系统梳理，本报告将为企业后续优化患者教育内容、完善用药支持服务和提升产品应用沟通质量提供数据参考，也为临床端进一步加强慢病管理中的用药指导提供依据。
 
 ## 项目背景
 
-本次调研围绕患者使用厄贝沙坦氢氯噻嗪片过程中的真实体验展开，重点观察疗效感知、安全性体验、行为习惯以及信息支持等关键环节。
+随着人口老龄化加快和生活方式变化，高血压患病率持续维持在较高水平，患者对长期规范用药的依赖程度不断增强。厄贝沙坦氢氯噻嗪片作为复方降压药物，在真实临床应用中不仅承担控压作用，也直接影响患者对治疗便利性、耐受性与持续管理信心的判断。北京市患者就医渠道丰富、健康管理意识较强，为观察真实用药体验提供了较好的样本基础。
+
+但现阶段围绕该药物在区域患者中的实际使用反馈、依从行为差异及服务支持需求，仍缺乏持续、细化的专项调研结果，导致产品优化与患者沟通改进缺少足够的本地化依据。本次调研因此聚焦患者真实用药场景，希望通过结构化问卷补足关键数据缺口，为后续产品服务优化和患者管理支持提供更具针对性的参考。
 
 ## 项目开展情况
 
@@ -190,10 +265,33 @@ disclaimer_unit: 北京玖麟空科技有限公司
 """
 
 
+def minimal_markdown(product: str = "心达康胶囊", region: str = "安徽省") -> str:
+    return f"""---
+product: {product}
+region: {region}
+survey_period: 2026年5月13日至5月31日
+valid_count: 1000
+disclaimer_unit: 北京玖麟空科技有限公司
+---
+"""
+
+
+def copy_docx_with_document_xml_replace(source: Path, target: Path, old: str, new: str, count: int = 1) -> None:
+    with ZipFile(source) as src, ZipFile(target, "w") as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename == "word/document.xml":
+                data = data.decode("utf-8", "ignore").replace(old, new, count).encode("utf-8")
+            dst.writestr(item, data)
+
+
 class PipelineTest(unittest.TestCase):
     def test_cluster_dimensions_uses_efficacy_template(self) -> None:
         grouped = cluster_dimensions(efficacy_questionnaire())
         self.assertEqual(grouped["template_type"], "用药体验与疗效反馈")
+        self.assertEqual(grouped["dimension_count"], 7)
+        self.assertEqual(len(grouped["project_dimensions"]), 7)
+        self.assertIn("用药指导信息评价", grouped["project_dimensions"])
         self.assertEqual(grouped["sections"][0]["section_title"], "药品疗效")
         self.assertEqual(grouped["sections"][0]["section_intro"], "本维度用于观察患者对控压效果的主观感知。")
         self.assertGreater(len(grouped["sections"]), 0)
@@ -226,14 +324,25 @@ class PipelineTest(unittest.TestCase):
                 ),
             )
         validate_payload(payload)
-        self.assertEqual(len(payload["preface"]), 1)
-        self.assertEqual(len(payload["project_background"]), 1)
-        self.assertNotRegex(payload["preface"][0], r"#+")
-        self.assertNotRegex(payload["project_background"][0], r"#+")
+        self.assertEqual(len(payload["preface"]), 2)
+        self.assertEqual(len(payload["project_background"]), 2)
+        for paragraph in payload["preface"]:
+            self.assertNotRegex(paragraph, r"#+")
+        for paragraph in payload["project_background"]:
+            self.assertNotRegex(paragraph, r"#+")
+        self.assertGreaterEqual(sum(len(p) for p in payload["preface"]), 380)
+        self.assertLessEqual(sum(len(p) for p in payload["preface"]), 430)
+        self.assertGreaterEqual(sum(len(p) for p in payload["project_background"]), 180)
+        self.assertLessEqual(sum(len(p) for p in payload["project_background"]), 360)
+        self.assertIn("北京市", "".join(payload["preface"]))
+        self.assertIn("患者", "".join(payload["preface"]))
+        self.assertIn("提供", payload["preface"][-1])
+        self.assertIn("北京市", "".join(payload["project_background"]))
+        self.assertIn("本次调研", "".join(payload["project_background"]))
         self.assertEqual(
             payload["project_execution"]["lines"],
             [
-                "项目工具：调查问卷，14道选择题。其内容涵盖药品疗效、药品安全性、用药行为与习惯、用药便利性、药品经济性、药品可及性6大维度，全面覆盖患者用药全流程关键节点。",
+                "项目工具：调查问卷，14道选择题。其内容涵盖药品疗效、药品安全性、用药行为与习惯、用药便利性、药品经济性、药品可及性、用药指导信息评价7大维度，全面覆盖患者用药全流程关键节点。",
                 "样本采集范围：北京市",
                 "样本采集数量：本次共收集筛选到有效问卷1789份。",
                 "样本采集时间：2025年10月01日——2025年10月31日",
@@ -243,12 +352,33 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(len(payload["questionnaire_note"]["items"]), 4)
         self.assertEqual(
             payload["result_analysis"]["intro"],
-            ["本次调查采用问卷调查方式，共有14个问题，本报告从药品疗效、药品安全性、用药行为与习惯、用药便利性、药品经济性、药品可及性等6个维度展开统计分析。"],
+            ["本次调查采用问卷调查方式，共有14个问题，本报告从药品疗效、药品安全性、用药行为与习惯、用药便利性、药品经济性、药品可及性、用药指导信息评价等7个维度展开统计分析。"],
         )
+        self.assertEqual(len(payload["result_analysis"]["overview_charts"]), 2)
+        self.assertEqual(payload["result_analysis"]["overview_charts"][0]["chart_type"], "pie")
+        self.assertEqual(payload["result_analysis"]["overview_charts"][1]["chart_type"], "bar")
+        self.assertEqual(payload["result_analysis"]["overview_charts"][0]["render_mode"], "image")
+        self.assertEqual(payload["result_analysis"]["overview_charts"][1]["render_mode"], "image")
+        self.assertEqual(
+            payload["result_analysis"]["overview_charts"][0]["categories"],
+            ["药品疗效", "药品安全性", "用药行为与习惯", "用药便利性", "药品经济性", "药品可及性", "用药指导信息评价"],
+        )
+        self.assertEqual(payload["result_analysis"]["overview_charts"][0]["categories"], payload["result_analysis"]["overview_charts"][1]["categories"])
+        self.assertEqual(payload["result_analysis"]["overview_charts"][0]["values"], [1, 2, 5, 2, 1, 1, 2])
+        self.assertEqual(payload["result_analysis"]["overview_charts"][0]["values"], payload["result_analysis"]["overview_charts"][1]["values"])
         self.assertEqual(payload["result_analysis"]["sections"][0]["section_title"], "药品疗效")
         self.assertEqual(payload["result_analysis"]["sections"][0]["section_intro"], ["本维度用于观察患者对控压效果的主观感知。"])
         self.assertEqual(payload["result_analysis"]["sections"][0]["subtopics"][0]["subtitle"], "血压控制效果分析")
         self.assertEqual(payload["result_analysis"]["sections"][0]["visual_groups"][0]["chart_type"], "pie")
+        self.assertEqual(len(payload["result_analysis"]["sections"][3]["visual_groups"]), 2)
+        self.assertEqual(len(payload["result_analysis"]["sections"][4]["visual_groups"]), 1)
+        self.assertEqual(len(payload["result_analysis"]["sections"][5]["visual_groups"]), 1)
+        self.assertEqual(len(payload["result_analysis"]["sections"][6]["visual_groups"]), 2)
+        self.assertIsNone(payload["result_analysis"]["sections"][3]["visual_groups"][0]["chart_ref"])
+        self.assertEqual(
+            payload["result_analysis"]["sections"][3]["visual_groups"][0]["table_data"]["question"],
+            "您对厄贝沙坦氢氯噻嗪片的服药频率满意度如何？",
+        )
         self.assertEqual(payload["report_title"], "问卷调研分析报告")
         self.assertEqual(payload["header_text"], "问卷调研分析报告")
         self.assertEqual(payload["meta"]["survey_period"], "2025年10月01日——2025年10月31日")
@@ -262,12 +392,77 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(payload["summary"]["key_issue_analysis"], payload["summary"]["key_issue_analysis_programmatic"])
         self.assertEqual(len(payload["summary"]["key_issue_items"]), 2)
         self.assertEqual(payload["summary"]["key_issue_items"][0]["heading"], "1. 血压控制现状与特征")
-        self.assertEqual(payload["summary"]["key_issue_items"][1]["heading"], "2. 药品价格接受度情况")
+        self.assertEqual(payload["summary"]["key_issue_items"][1]["heading"], "2. 不良反应发生率")
+        self.assertEqual(payload["summary"]["key_issue_items"][0]["chart_title"], "患者血压控制效果")
+        self.assertEqual(payload["summary"]["key_issue_items"][1]["chart_title"], "不良反应发生率")
+        self.assertEqual(payload["summary"]["key_issue_items"][0]["chart_type"], "pie")
+        self.assertEqual(payload["summary"]["key_issue_items"][1]["chart_type"], "pie")
         self.assertGreaterEqual(len(payload["summary"]["overall_analysis"]), 4)
         self.assertLessEqual(sum(len(paragraph) for paragraph in payload["summary"]["overall_analysis"]), 700)
         self.assertEqual(payload["summary"]["overall_analysis"], payload["summary"]["overall_analysis_programmatic"])
         self.assertEqual(len(payload["summary"]["key_issue_analysis"]), 4)
         self.assertEqual(len(payload["summary"]["recommendations"]), 3)
+        subtopic_lookup = {
+            subtopic["subtitle"]: subtopic["paragraphs"]
+            for section in payload["result_analysis"]["sections"]
+            for subtopic in section["subtopics"]
+        }
+        for subtitle in ["头晕头痛不良反应分析", "购药渠道分析", "药品供应稳定性分析"]:
+            paragraphs = subtopic_lookup[subtitle]
+            self.assertEqual(len(paragraphs), 1)
+            self.assertGreaterEqual(len(paragraphs[0]), MIN_ANALYSIS_CHARS)
+            self.assertLessEqual(len(paragraphs[0]), MAX_ANALYSIS_CHARS)
+            self.assertNotRegex(paragraphs[0], r"[ABCD]\.")
+            self.assertRegex(paragraphs[0], r"[%％]")
+            self.assertNotIn("选项A", paragraphs[0])
+            self.assertNotIn("选项B", paragraphs[0])
+            self.assertNotIn("逐项分布", paragraphs[0])
+            self.assertTrue(any(marker in paragraphs[0] for marker in ["表明", "说明", "反映", "提示"]))
+            self.assertTrue(any(marker in paragraphs[0] for marker in ["需", "仍", "可见", "整体", "进一步"]))
+
+        analysis_paragraphs = [
+            subtopic["paragraphs"][0]
+            for section in payload["result_analysis"]["sections"]
+            for subtopic in section["subtopics"]
+        ]
+        openings = [analysis_opening(paragraph) for paragraph in analysis_paragraphs]
+        self.assertGreaterEqual(len(OPENING_STYLE_LIBRARY), 15)
+        self.assertFalse(all(paragraph.startswith("从当前题目反馈分布看") for paragraph in analysis_paragraphs))
+        self.assertGreaterEqual(len(set(openings)), int(len(openings) * 0.7))
+
+    def test_adherence_payload_uses_diverse_analysis_openings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(minimal_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                adherence_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+
+        analysis_paragraphs = [
+            subtopic["paragraphs"][0]
+            for section in payload["result_analysis"]["sections"]
+            for subtopic in section["subtopics"]
+        ]
+        openings = [analysis_opening(paragraph) for paragraph in analysis_paragraphs]
+        self.assertFalse(all(paragraph.startswith("从当前题目反馈分布看") for paragraph in analysis_paragraphs))
+        self.assertGreaterEqual(len(set(openings)), int(len(openings) * 0.7))
+        for paragraph in analysis_paragraphs:
+            self.assertGreaterEqual(len(paragraph), MIN_ANALYSIS_CHARS)
+            self.assertLessEqual(len(paragraph), MAX_ANALYSIS_CHARS)
+            self.assertTrue(is_complete_analysis(paragraph))
 
     def test_build_payload_rejects_conflicting_draft_structure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -328,28 +523,39 @@ class PipelineTest(unittest.TestCase):
             )
             output_docx = Path(temp_dir) / "rendered.docx"
             TemplateRenderer(Path(payload["meta"]["template_doc"]), payload).render(output_docx)
+            validate_docx(output_docx, payload)
 
             document = Document(output_docx)
             texts = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
             all_text = "\n".join(texts)
-            expected_table_questions = [
-                visual["table_data"]["question"]
-                for section in payload["result_analysis"]["sections"]
-                for visual in section["visual_groups"]
-            ]
+            expected_table_questions = expected_result_table_questions(payload)
             for required in ["问卷调研服务结算", "目录", "前言", "项目背景", "项目开展情况", "问卷说明", "问卷结果分析", "调研结果", "免责申明"]:
                 self.assertIn(required, texts)
             self.assertLess(texts.index("目录"), texts.index("前言"))
             self.assertIn(payload["report_title"], texts)
-            self.assertIn("4.1药品疗效", texts)
-            self.assertIn("血压控制效果分析", texts)
+            self.assertIn("4.1 药品疗效", texts)
+            self.assertIn("（1） 血压控制效果分析", texts)
+            self.assertIn("（1） 服药频率满意度分析", texts)
+            self.assertIn("（1） 价格负担影响分析", texts)
+            self.assertIn("（1） 药品供应稳定性分析", texts)
+            self.assertIn("（1） 说明书信息清晰度分析", texts)
             self.assertIn("附件2：问卷调查明细表", texts)
+            for subtitle in ["（1） 头晕头痛不良反应分析", "（1） 购药渠道分析", "（1） 药品供应稳定性分析"]:
+                subtitle_idx = texts.index(subtitle)
+                body_text = texts[subtitle_idx + 1]
+                self.assertGreaterEqual(len(body_text), MIN_ANALYSIS_CHARS)
+                self.assertLessEqual(len(body_text), MAX_ANALYSIS_CHARS)
+                self.assertNotRegex(body_text, r"[ABCD]\.")
+                self.assertRegex(body_text, r"[%％]")
+                self.assertNotIn("选项A", body_text)
+                self.assertNotIn("逐项分布", body_text)
+                self.assertTrue(any(marker in body_text for marker in ["表明", "说明", "反映", "提示"]))
             self.assertNotIn("E.E", all_text)
             self.assertNotRegex(all_text, r"\n#+")
             self.assertGreaterEqual(len(document.tables), len(expected_table_questions) + 1)
             self.assertEqual(len(document.sections), 5)
             self.assertEqual(document.sections[0].header.paragraphs[0].text, payload["header_text"])
-            self.assertIn("项目工具：调查问卷，14道选择题。其内容涵盖药品疗效、药品安全性、用药行为与习惯、用药便利性、药品经济性、药品可及性6大维度，全面覆盖患者用药全流程关键节点。", texts)
+            self.assertIn("项目工具：调查问卷，14道选择题。其内容涵盖药品疗效、药品安全性、用药行为与习惯、用药便利性、药品经济性、药品可及性、用药指导信息评价7大维度，全面覆盖患者用药全流程关键节点。", texts)
             self.assertIn("样本采集时间：2025年10月01日——2025年10月31日", texts)
             self.assertIn(f"服务单位：{payload['service']['unit']}", texts)
             self.assertIn(f"日期：{payload['service']['date']}", texts)
@@ -363,24 +569,28 @@ class PipelineTest(unittest.TestCase):
             key_issue_idx = texts.index("5.1问卷重点问题分析")
             key_issue_end = texts.index("5.2调研结果分析")
             key_issue_body = texts[key_issue_idx + 1:key_issue_end]
-            self.assertIn("1. 血压控制现状与特征", key_issue_body)
-            self.assertIn("2. 药品价格接受度情况", key_issue_body)
-            self.assertEqual(len(key_issue_body), 4)
-            title_para_1 = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == "1. 血压控制现状与特征")
-            title_para_2 = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == "2. 药品价格接受度情况")
-            self.assertEqual(title_para_1.alignment, 0)
-            self.assertEqual(title_para_2.alignment, 0)
+            self.assertNotIn("重点问题分析", key_issue_body)
+            self.assertNotIn("1. 血压控制现状与特征", key_issue_body)
+            self.assertNotIn("2. 不良反应发生率", key_issue_body)
+            self.assertEqual(len(key_issue_body), len(payload["summary"]["key_issue_items"]))
+            self.assertTrue(any("血压控制" in paragraph for paragraph in key_issue_body))
+            self.assertTrue(any("不良反应" in paragraph for paragraph in key_issue_body))
             overall_idx = texts.index("5.2调研结果分析")
             overall_end = texts.index("5.3建议")
             overall_paragraphs = texts[overall_idx + 1:overall_end]
             self.assertGreaterEqual(len(overall_paragraphs), 4)
             self.assertLessEqual(sum(len(paragraph) for paragraph in overall_paragraphs), 700)
-            first_key_issue_para = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == key_issue_body[1])
+            first_key_issue_para = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == key_issue_body[0])
             self.assertEqual(first_key_issue_para.alignment, 3)
             self.assertEqual(first_key_issue_para.paragraph_format.line_spacing, 2.5)
             self.assertEqual(first_key_issue_para.paragraph_format.first_line_indent, 304800)
             disclaimer_heading = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == "免责申明")
-            disclaimer_item = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip().startswith("（1）"))
+            disclaimer_heading_pos = next(i for i, paragraph in enumerate(document.paragraphs) if paragraph.text.strip() == "免责申明")
+            disclaimer_item = next(
+                paragraph
+                for paragraph in document.paragraphs[disclaimer_heading_pos + 1:]
+                if paragraph.text.strip().startswith("（1）")
+            )
             disclaimer_unit = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == f"服务提供单位:{payload['service']['unit']}")
             self.assertEqual(disclaimer_heading.alignment, 1)
             self.assertEqual(disclaimer_item.alignment, 3)
@@ -394,26 +604,81 @@ class PipelineTest(unittest.TestCase):
             analysis_table_questions = []
             for table in document.tables:
                 first_cell_text = table.cell(0, 0).text.strip()
+                normalized_text = re.sub(r"^\d+\.", "", first_cell_text)
                 for question in expected_table_questions:
-                    if first_cell_text == question:
-                        analysis_table_questions.append(first_cell_text)
+                    if normalized_text == question:
+                        analysis_table_questions.append(normalized_text)
             self.assertEqual(len(analysis_table_questions), len(expected_table_questions))
             self.assertEqual(Counter(analysis_table_questions), Counter(expected_table_questions))
-            self.assertFalse(any(re.match(r"^\d+(?:\.\d+)*\.", question) for question in analysis_table_questions))
+            self.assertIn("您对厄贝沙坦氢氯噻嗪片的服药频率满意度如何？", analysis_table_questions)
+            self.assertIn("您认为厄贝沙坦氢氯噻嗪片的价格对您的用药负担影响如何？", analysis_table_questions)
+            self.assertIn("您所在地区的厄贝沙坦氢氯噻嗪片供应是否稳定？", analysis_table_questions)
+            self.assertIn("您对厄贝沙坦氢氯噻嗪片说明书中 “用法用量”“不良反应” 的标注清晰度评价如何？", analysis_table_questions)
 
             with ZipFile(output_docx) as zipped:
                 xml = zipped.read("word/document.xml").decode("utf-8", "ignore")
                 settings_xml = zipped.read("word/settings.xml").decode("utf-8", "ignore")
-                chart1_xml = zipped.read("word/charts/chart1.xml").decode("utf-8", "ignore")
-                chart2_xml = zipped.read("word/charts/chart2.xml").decode("utf-8", "ignore")
+                chart_names = [name for name in zipped.namelist() if re.match(r"word/charts/chart\\d+\\.xml$", name)]
+                media_files = [name for name in zipped.namelist() if name.startswith("word/media/") and name != "word/media/"]
+            with ZipFile(Path(payload["meta"]["template_doc"])) as template_zipped:
+                template_chart_names = [name for name in template_zipped.namelist() if re.match(r"word/charts/chart\\d+\\.xml$", name)]
+                template_media_files = [name for name in template_zipped.namelist() if name.startswith("word/media/") and name != "word/media/"]
             self.assertIn('TOC \\o "1-3" \\h \\u', xml)
             self.assertNotIn("w:sdt", xml)
             self.assertIn("updateFields", settings_xml)
             self.assertIn('w:val="true"', settings_xml)
             self.assertIn("调研时间：2025年10月01日——2025年10月31日", xml)
             self.assertNotIn("2025年11月1日-11月30日", xml)
-            self.assertIn("患者血压控制效果", chart1_xml)
-            self.assertIn("药品价格接受度情况", chart2_xml)
+            self.assertEqual(sorted(chart_names), sorted(template_chart_names))
+            self.assertGreaterEqual(len(media_files), len(template_media_files) + 4)
+
+            preface_idx = texts.index("前言")
+            title_idx = texts.index(payload["report_title"])
+            preface_body = texts[preface_idx + 1:title_idx]
+            self.assertEqual(len(preface_body), 2)
+            self.assertIn(payload["preface"][0], preface_body)
+            self.assertIn(payload["preface"][-1], preface_body)
+
+            background_idx = texts.index("项目背景")
+            execution_idx = texts.index("项目开展情况")
+            background_body = texts[background_idx + 1:execution_idx]
+            self.assertEqual(len(background_body), 2)
+            self.assertEqual(background_body, payload["project_background"])
+
+            drawing_indices = [i for i, paragraph in enumerate(document.paragraphs) if paragraph._element.xpath('.//w:drawing')]
+            result_idx = next(i for i, paragraph in enumerate(document.paragraphs) if paragraph.text.strip() == "问卷结果分析")
+            section_41_idx = next(i for i, paragraph in enumerate(document.paragraphs) if paragraph.text.strip() == "4.1 药品疗效")
+            key_issue_heading_idx = next(i for i, paragraph in enumerate(document.paragraphs) if paragraph.text.strip() == "5.1问卷重点问题分析")
+            key_issue_end_idx = next(i for i, paragraph in enumerate(document.paragraphs) if paragraph.text.strip() == "5.2调研结果分析")
+            result_drawings = [i for i in drawing_indices if result_idx < i < section_41_idx]
+            key_issue_drawings = [i for i in drawing_indices if key_issue_heading_idx < i < key_issue_end_idx]
+            self.assertEqual(len(result_drawings), 2)
+            self.assertEqual(len(key_issue_drawings), 2)
+
+            xml_root = ET.fromstring(xml.encode("utf-8"))
+            ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+            for paragraph in xml_root.findall(".//w:p", ns):
+                para_text = "".join(node.text or "" for node in paragraph.findall(".//w:t", ns)).strip()
+                if re.match(r"^（\\d+）", para_text):
+                    ppr = paragraph.find("w:pPr", ns)
+                    self.assertIsNone(ppr.find("w:numPr", ns) if ppr is not None else None)
+
+            attachment1_idx = texts.index(f"附件1：{payload['attachments']['attachment1_name']}")
+            attachment2_idx = texts.index("附件2：问卷调查明细表")
+            attachment_body = texts[attachment1_idx + 1:attachment2_idx]
+            expected_questions = payload["attachments"]["attachment1_questions"]
+            self.assertEqual(attachment_body[0], "（1） 您服用厄贝沙坦氢氯噻嗪片后，血压控制效果如何？")
+            self.assertEqual(attachment_body[1:5], ["A. 选项A", "B. 选项B", "C. 选项C", "D. 选项D"])
+            self.assertEqual(attachment_body[5], "（2） 您服用厄贝沙坦氢氯噻嗪片期间，是否出现过头晕、头痛症状？")
+            self.assertNotIn("（1） 1.", "\n".join(attachment_body))
+            self.assertNotIn("（2） 6.", "\n".join(attachment_body))
+            for display_index, question in enumerate(expected_questions, start=1):
+                formatted = f"（{display_index}） {re.sub(r'^\\s*\\d+\\s*[\\.．、]\\s*', '', question['question'])}"
+                self.assertIn(formatted, attachment_body)
+                question_pos = attachment_body.index(formatted)
+                expected_options = [f"{opt['code']}. {opt['text']}" for opt in question["options"]]
+                actual_options = attachment_body[question_pos + 1:question_pos + 1 + len(expected_options)]
+                self.assertEqual(actual_options, expected_options)
 
     def test_render_from_template_does_not_fallback_to_first_visual_group_on_unmatched_table(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -453,11 +718,7 @@ class PipelineTest(unittest.TestCase):
             TemplateRenderer(tampered_template, payload).render(output_docx)
 
             document = Document(output_docx)
-            expected_table_questions = [
-                visual["table_data"]["question"]
-                for section in payload["result_analysis"]["sections"]
-                for visual in section["visual_groups"]
-            ]
+            expected_table_questions = expected_result_table_questions(payload)
             analysis_table_questions = []
             for table in document.tables:
                 first_cell_text = table.cell(0, 0).text.strip()
@@ -466,6 +727,230 @@ class PipelineTest(unittest.TestCase):
                         analysis_table_questions.append(first_cell_text)
             counts = Counter(analysis_table_questions)
             self.assertLessEqual(counts[payload["result_analysis"]["sections"][0]["visual_groups"][0]["table_data"]["question"]], 1)
+
+    def test_adherence_render_removes_extra_template_sections_and_passes_final_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(minimal_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                adherence_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+            validate_payload(payload)
+            self.assertEqual(payload["meta"]["template_type"], "依从性与用药习惯")
+            self.assertEqual([section["section_number"] for section in payload["result_analysis"]["sections"]], ["4.1", "4.2", "4.3", "4.4"])
+
+            output_docx = Path(temp_dir) / "adherence.docx"
+            TemplateRenderer(Path(payload["meta"]["template_doc"]), payload).render(output_docx)
+            validate_docx(output_docx, payload)
+
+            texts = [paragraph.text.strip() for paragraph in Document(output_docx).paragraphs if paragraph.text.strip()]
+            self.assertIn("4.1 药物认知与信息获取", texts)
+            self.assertIn("4.4 健康教育与支持需求", texts)
+            self.assertNotIn("4.5 药品经济性", texts)
+            self.assertNotIn("4.6 药品可及性", texts)
+            self.assertNotIn("4.7 用药指导信息评价", texts)
+
+    def test_final_validator_rejects_historical_regressions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+            output_docx = Path(temp_dir) / "rendered.docx"
+            TemplateRenderer(Path(payload["meta"]["template_doc"]), payload).render(output_docx)
+            validate_docx(output_docx, payload)
+
+            bad_payload = copy.deepcopy(payload)
+            bad_payload["result_analysis"]["sections"] = bad_payload["result_analysis"]["sections"][:4]
+            with self.assertRaisesRegex(FinalValidationError, "section headings mismatch"):
+                validate_docx(output_docx, bad_payload)
+
+            first_paragraph = payload["result_analysis"]["sections"][0]["subtopics"][0]["paragraphs"][0]
+            old_style = (
+                "建议继续优化。逐项分布来看，选择主要选项的患者占比达到39.13%，说明该题仍存在旧式百分比分析表达，"
+                "并且把选项差异直接转写为数字判断，弱化了模板要求的主结论、解释和收束逻辑。整体来看，这类写法容易让报告回到机械枚举状态，"
+                "无法体现患者真实反馈背后的行为含义，也不利于后续形成稳定的专业研判。建议继续沿用这种旧式表达会造成质量回退。"
+            )
+            old_style_docx = Path(temp_dir) / "old-style.docx"
+            copy_docx_with_document_xml_replace(output_docx, old_style_docx, first_paragraph, old_style)
+            with self.assertRaisesRegex(FinalValidationError, "Forbidden old-style analysis"):
+                validate_docx(old_style_docx, payload)
+
+            attachment_docx = Path(temp_dir) / "bad-attachment.docx"
+            copy_docx_with_document_xml_replace(
+                output_docx,
+                attachment_docx,
+                "（1） 您服用厄贝沙坦氢氯噻嗪片后，血压控制效果如何？",
+                "1.您服用厄贝沙坦氢氯噻嗪片后，血压控制效果如何？",
+            )
+            with self.assertRaisesRegex(FinalValidationError, "raw numeric question prefixes|question order mismatch"):
+                validate_docx(attachment_docx, payload)
+
+            font_docx = Path(temp_dir) / "bad-font.docx"
+            copy_docx_with_document_xml_replace(output_docx, font_docx, "汉仪中宋简", "SimSun", count=1000)
+            with self.assertRaisesRegex(FinalValidationError, "Unexpected font"):
+                validate_docx(font_docx, payload)
+
+    def test_derive_preface_and_background_follow_template_rules(self) -> None:
+        preface = derive_preface("厄贝沙坦氢氯噻嗪片", "北京市", "1789")
+        background = derive_project_background("厄贝沙坦氢氯噻嗪片", "北京市")
+
+        self.assertEqual(len(preface), 2)
+        self.assertEqual(len(background), 2)
+        self.assertGreaterEqual(sum(len(p) for p in preface), 380)
+        self.assertLessEqual(sum(len(p) for p in preface), 430)
+        self.assertGreaterEqual(sum(len(p) for p in background), 180)
+        self.assertLessEqual(sum(len(p) for p in background), 360)
+        self.assertTrue(any("北京市" in p for p in preface))
+        self.assertTrue(any("1789" in p for p in preface))
+        self.assertTrue(any("北京市" in p for p in background))
+        self.assertNotIn("通用高血压降压药", "".join(preface))
+        self.assertNotIn("通用高血压降压药", "".join(background))
+
+    def test_expression_analysis_fits_new_style_rules(self) -> None:
+        options = [
+            {"label": "A", "text": "血压稳定在正常范围", "count": "880", "pct": "49.19%"},
+            {"label": "B", "text": "血压多数时间处于正常范围", "count": "804", "pct": "44.94%"},
+            {"label": "C", "text": "血压偶尔超出正常范围", "count": "105", "pct": "5.87%"},
+            {"label": "D", "text": "血压持续超出正常范围", "count": "0", "pct": "0.00%"},
+        ]
+        paragraph = build_analysis_paragraph("您服用厄贝沙坦氢氯噻嗪片后，血压控制效果如何？", options)
+        self.assertGreaterEqual(len(paragraph), MIN_ANALYSIS_CHARS)
+        self.assertLessEqual(len(paragraph), MAX_ANALYSIS_CHARS)
+        self.assertNotRegex(paragraph, r"[ABCD]\.")
+        self.assertRegex(paragraph, r"[%％]")
+        self.assertNotIn("选项A", paragraph)
+        self.assertNotIn("选项B", paragraph)
+        self.assertNotIn("逐项分布", paragraph)
+        self.assertNotIn("从共性特征看", paragraph)
+        self.assertTrue(is_complete_analysis(paragraph))
+
+    def test_expression_opening_style_library_rotates_stably(self) -> None:
+        self.assertGreaterEqual(len(OPENING_STYLE_LIBRARY), 15)
+        options = [
+            {"label": "A", "text": "非常了解", "count": "410", "pct": "41.00%"},
+            {"label": "B", "text": "比较了解", "count": "360", "pct": "36.00%"},
+            {"label": "C", "text": "一般了解", "count": "180", "pct": "18.00%"},
+            {"label": "D", "text": "不了解", "count": "50", "pct": "5.00%"},
+        ]
+        paragraphs = [
+            build_analysis_paragraph("您对心达康胶囊作用的了解程度如何？", options, style_index=index)
+            for index in range(15)
+        ]
+        openings = [analysis_opening(paragraph) for paragraph in paragraphs]
+        self.assertEqual(len(set(openings)), 15)
+        self.assertNotIn("从当前题目反馈分布看", openings)
+        for paragraph in paragraphs:
+            self.assertTrue(is_complete_analysis(paragraph))
+
+    def test_is_complete_analysis_rejects_old_style_or_invalid_length(self) -> None:
+        old_style = "建议继续优化。就逐项分布而言，选择A.选项A的患者占39.13%。整体来看，前两项反馈占比很高。从共性特征看，当前反馈较积极。"
+        too_short = "多数患者反馈较积极，但仍需继续观察。"
+        too_long = "整体反馈积极，说明产品表现较稳。" * 30
+        self.assertFalse(is_complete_analysis(old_style))
+        self.assertFalse(is_complete_analysis(too_short))
+        self.assertFalse(is_complete_analysis(too_long))
+
+    def test_validate_payload_rejects_preface_background_that_break_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+
+        invalid_cases = [
+            ("single preface", {"preface": ["仅有一段，内容虽然提到北京市患者调研和产品价值，但整体仍明显过短，无法满足模板化前言要求。"]}, "Preface must contain exactly 2 paragraphs"),
+            ("single background", {"project_background": ["仅有一段背景描述，虽然提到北京市和调研必要性，但未按两段结构展开，故应直接失败。"]}, "Project background must contain exactly 2 paragraphs"),
+            ("missing region", {"preface": payload["preface"][:], "project_background": [p.replace("北京市", "该地区") for p in payload["project_background"]]}, "Project background must mention the region"),
+            ("duplicate sections", {"project_background": payload["preface"][:2]}, "Project background must not substantially repeat the preface"),
+        ]
+
+        for _, patch, message in invalid_cases:
+            bad_payload = dict(payload)
+            bad_payload.update(patch)
+            with self.assertRaisesRegex(ValueError, message):
+                validate_payload(bad_payload)
+
+    def test_validate_payload_rejects_invalid_overview_chart_types_or_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+
+        payload["result_analysis"]["overview_charts"][1]["chart_type"] = "pie"
+        with self.assertRaisesRegex(ValueError, "must be bar"):
+            validate_payload(payload)
+
+        payload["result_analysis"]["overview_charts"][1]["chart_type"] = "bar"
+        payload["result_analysis"]["overview_charts"][1]["render_mode"] = "office"
+        with self.assertRaisesRegex(ValueError, "must use image render mode"):
+            validate_payload(payload)
+
+        payload["result_analysis"]["overview_charts"][1]["render_mode"] = "image"
+        payload["result_analysis"]["overview_charts"][0]["render_mode"] = "office"
+        with self.assertRaisesRegex(ValueError, "must use image render mode"):
+            validate_payload(payload)
+
+        payload["result_analysis"]["overview_charts"][0]["render_mode"] = "image"
+        payload["result_analysis"]["overview_charts"][1]["values"] = [1.5, 2, 3]
+        with self.assertRaisesRegex(ValueError, "integer question counts"):
+            validate_payload(payload)
 
 
 if __name__ == "__main__":

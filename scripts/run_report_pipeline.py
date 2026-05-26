@@ -5,15 +5,18 @@ import argparse
 import hashlib
 import json
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
 try:
     from .build_payload import build_payload, parse_markdown_content, validate_payload
+    from .final_validate_docx import FinalValidationError, validate_docx
     from .parse_questionnaire import parse_sheet
     from .render_from_template import TemplateRenderer
 except ImportError:
     from build_payload import build_payload, parse_markdown_content, validate_payload
+    from final_validate_docx import FinalValidationError, validate_docx
     from parse_questionnaire import parse_sheet
     from render_from_template import TemplateRenderer
 
@@ -33,6 +36,24 @@ def default_run_dir(questionnaire_path: Path, content_path: Path) -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     stem = slugify(questionnaire_path.stem)
     return ROOT / "tmp" / "runs" / f"{stamp}-{stem}-{digest}"
+
+
+def file_sha1(path: Path) -> str:
+    digest = hashlib.sha1()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_info(path: Path) -> dict:
+    resolved = path.resolve()
+    stat = resolved.stat()
+    return {
+        "path": str(resolved),
+        "mtime": stat.st_mtime,
+        "sha1": file_sha1(resolved),
+    }
 
 
 def main() -> None:
@@ -70,6 +91,36 @@ def main() -> None:
     output_docx = Path(args.output_docx) if args.output_docx else run_dir / "report.docx"
     output_docx.parent.mkdir(parents=True, exist_ok=True)
     TemplateRenderer(Path(payload["meta"]["template_doc"]), payload).render(output_docx)
+
+    manifest = {
+        "skill_root": str(ROOT.resolve()),
+        "run_dir": str(run_dir.resolve()),
+        "scripts": {
+            "run_report_pipeline": file_info(Path(__file__)),
+            "build_payload": file_info(ROOT / "scripts" / "build_payload.py"),
+            "render_from_template": file_info(ROOT / "scripts" / "render_from_template.py"),
+            "final_validate_docx": file_info(ROOT / "scripts" / "final_validate_docx.py"),
+        },
+        "template_doc": file_info(Path(payload["meta"]["template_doc"])),
+        "inputs": {
+            "questionnaire_xlsx": file_info(questionnaire_path),
+            "report_content": file_info(report_content_path),
+        },
+        "artifacts": {
+            "questionnaire_json": file_info(questionnaire_json),
+            "payload_json": file_info(payload_json),
+            "output_docx": str(output_docx.resolve()),
+        },
+    }
+    manifest_json = run_dir / "run_manifest.json"
+    manifest_json.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    try:
+        validate_docx(output_docx, payload)
+    except FinalValidationError as exc:
+        print(f"FINAL_VALIDATION_WARNING: {exc}", file=sys.stderr)
+        print(f"Run diagnostics retained at: {run_dir.resolve()}", file=sys.stderr)
+        # Keep output for debugging
 
     print(output_docx.resolve())
 

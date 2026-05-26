@@ -36,8 +36,9 @@ EFFICACY_GROUPING = {
         "用药便利性",
         "药品经济性",
         "药品可及性",
+        "用药指导信息评价",
     ],
-    "key_issue_preferred_sections": ["4.1", "4.5", "4.3", "4.6"],
+    "key_issue_preferred_sections": ["4.1", "4.2", "4.5", "4.3"],
     "result_intro_template": (
         "本次调查采用问卷调查方式，共有{question_count}个问题，"
         "本报告从{dimensions_list}等{dimension_count}个维度展开统计分析。"
@@ -301,7 +302,11 @@ def question_ref(number: int) -> str:
 
 def detect_template_type(questionnaire: dict) -> str:
     corpus = " ".join(str(item.get("question", "")) for item in questionnaire.get("questions", []))
-    if re.search(r"血压控制|头晕|头痛|口渴|多尿|价格|供应|说明书|包装|购药渠道", corpus):
+    efficacy_hits = len(re.findall(r"血压控制|头晕|头痛|口渴|多尿|价格|供应|说明书|包装|购药渠道", corpus))
+    adherence_hits = len(re.findall(r"依从|漏服|自行调整|储存方法|忘记服药|记录每日服药|提醒自己服药|坚持规律|健康教育", corpus))
+    if adherence_hits > efficacy_hits:
+        return ADHERENCE_GROUPING["template_type"]
+    if efficacy_hits:
         return EFFICACY_GROUPING["template_type"]
     return ADHERENCE_GROUPING["template_type"]
 
@@ -330,6 +335,19 @@ def _validate_no_duplicate_refs(sections: list[dict]) -> None:
                     "section_number": sec["section_number"],
                     "subtopic_index": st["subtopic_index"],
                 }
+
+
+def _validate_grouping_config(config: dict, sections_out: list[dict]) -> None:
+    project_dimensions = config.get("project_dimensions", [])
+    configured_dimension_count = config.get("dimension_count")
+    if len(project_dimensions) != len(sections_out):
+        raise ValueError(
+            "Grouping config is inconsistent: project_dimensions count does not match output sections count."
+        )
+    if configured_dimension_count != len(project_dimensions):
+        raise ValueError(
+            "Grouping config is inconsistent: dimension_count does not match project_dimensions count."
+        )
 
 
 # ─── Core: cluster questions into dimension/subtopic slots ──────────────────
@@ -368,7 +386,9 @@ def cluster_dimensions(questionnaire: dict) -> dict:
             # Unmatched → last subtopic of last section
             config["sections"][-1]["subtopics"][-1].setdefault("question_refs", []).append(ref)
 
-    # Phase 2: build output sections (active subtopics only)
+    # Phase 2: build output sections — split multi-question subtopics into
+    # per-question subtopics so each question gets its own analysis unit
+    # (subtitle → table → analysis paragraph), matching the template pattern.
     chart_index = 1
     sections_out = []
     for section in config["sections"]:
@@ -381,23 +401,79 @@ def cluster_dimensions(questionnaire: dict) -> dict:
             if not refs:
                 continue
             section_question_refs.extend(refs)
-            if subtopic.get("include_chart"):
-                chart_ref = f"chart_{chart_index:02d}"
-                chart_index += 1
+            # If subtopic has exactly 1 question, keep as-is
+            if len(refs) == 1:
+                chart_ref = None
+                if subtopic.get("include_chart"):
+                    chart_ref = f"chart_{chart_index:02d}"
+                    chart_index += 1
                 visual_groups.append({
                     "question_ref": refs[0],
                     "chart_ref": chart_ref,
                     "chart_type": subtopic["chart_type"],
                     "chart_style_profile": subtopic["chart_style_profile"],
                 })
-            active_subtopics.append({
-                "subtopic_index": st_idx,
-                "subtitle": subtopic["subtitle"],
-                "question_refs": refs,
-                "chart_type": subtopic.get("chart_type"),
-                "chart_style_profile": subtopic.get("chart_style_profile"),
-            })
-            st_idx += 1
+                active_subtopics.append({
+                    "subtopic_index": st_idx,
+                    "subtitle": subtopic["subtitle"],
+                    "question_refs": refs,
+                    "chart_type": subtopic.get("chart_type"),
+                    "chart_style_profile": subtopic.get("chart_style_profile"),
+                })
+                st_idx += 1
+            else:
+                # Split multi-question subtopic: one subtopic per question
+                # Only the first question inherits chart config
+                for qi, ref in enumerate(refs):
+                    chart_ref = None
+                    if qi == 0 and subtopic.get("include_chart"):
+                        chart_ref = f"chart_{chart_index:02d}"
+                        chart_index += 1
+                    visual_groups.append({
+                        "question_ref": ref,
+                        "chart_ref": chart_ref,
+                        "chart_type": subtopic["chart_type"] if qi == 0 else None,
+                        "chart_style_profile": subtopic["chart_style_profile"] if qi == 0 else None,
+                    })
+                    # Derive subtitle from question content; fallback to
+                    # "{original_subtitle}（{qi+1}）" for backwards compat
+                    question_obj = next(
+                        (q for q in questionnaire.get("questions", [])
+                         if question_ref(int(q["number"])) == ref),
+                        None,
+                    )
+                    if question_obj and question_obj.get("question"):
+                        # Derive a concise subtitle from the question text.
+                        # Strategy: strip question number → find the topic
+                        # phrase (before the first "？" or "？" or "（")
+                        # → append "分析".
+                        raw = str(question_obj["question"])
+                        # Remove leading question number like "1." / "9." / "1）"
+                        cleaned = re.sub(r"^\d+[\.\)、]\s*", "", raw).strip()
+                        # Cut at question mark or parenthesis
+                        cut = len(cleaned)
+                        for sep in ["？", "?", "（", "（", "（", "("]:
+                            pos = cleaned.find(sep)
+                            if 0 < pos < cut:
+                                cut = pos
+                        # If still >8 chars, try comma/colon as secondary cut
+                        if cut > 8:
+                            for sep in ["：", "：", "，", ",", "、", "；", ";"]:
+                                pos = cleaned.find(sep)
+                                if 0 < pos < cut and pos <= 8:
+                                    cut = pos
+                        topic = cleaned[:min(cut, 8)]
+                        derived_subtitle = f"{topic}分析"
+                    else:
+                        derived_subtitle = f"{subtopic['subtitle']}（{qi + 1}）"
+                    active_subtopics.append({
+                        "subtopic_index": st_idx,
+                        "subtitle": derived_subtitle,
+                        "question_refs": [ref],
+                        "chart_type": subtopic.get("chart_type") if qi == 0 else None,
+                        "chart_style_profile": subtopic.get("chart_style_profile") if qi == 0 else None,
+                    })
+                    st_idx += 1
         sections_out.append({
             "section_number": section["section_number"],
             "section_title": section["section_title"],
@@ -409,6 +485,7 @@ def cluster_dimensions(questionnaire: dict) -> dict:
 
     # Phase 3: validate
     _validate_no_duplicate_refs(sections_out)
+    _validate_grouping_config(config, sections_out)
 
     return {
         "template_type": config["template_type"],

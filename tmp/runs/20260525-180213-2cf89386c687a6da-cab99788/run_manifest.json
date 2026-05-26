@@ -1,0 +1,56 @@
+{
+  "skill_root": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill",
+  "run_dir": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/tmp/runs/20260525-180213-2cf89386c687a6da-cab99788",
+  "scripts": {
+    "run_report_pipeline": {
+      "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/scripts/run_report_pipeline.py",
+      "mtime": 1779691344.1981218,
+      "sha1": "34d893454a32589d18f11ef91f41066085e7a58d"
+    },
+    "build_payload": {
+      "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/scripts/build_payload.py",
+      "mtime": 1779703272.17733,
+      "sha1": "5dff5db9d58a1bd5737c5277f8943a5df3db7aaa"
+    },
+    "render_from_template": {
+      "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/scripts/render_from_template.py",
+      "mtime": 1779702636.9784431,
+      "sha1": "b7d7a0c8ea49b94178049926c0fdc80fb5517428"
+    },
+    "final_validate_docx": {
+      "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/scripts/final_validate_docx.py",
+      "mtime": 1779700045.2482338,
+      "sha1": "075c2a8035e85e356ad0d6c84a240fa2d4527d05"
+    }
+  },
+  "template_doc": {
+    "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/templates/efficacy-report-template.docx",
+    "mtime": 1779354943.4037328,
+    "sha1": "dbdcd0e5ab30c85a1a95584be7697d7d7553b2c6"
+  },
+  "inputs": {
+    "questionnaire_xlsx": {
+      "path": "/Users/lee/.hermes-web-ui/upload/default/2cf89386c687a6da.xlsx",
+      "mtime": 1779703023.9128366,
+      "sha1": "326485dd9111806b592c256397cb0c46e136e6a2"
+    },
+    "report_content": {
+      "path": "/private/tmp/report_content_xindakang_anhui.md",
+      "mtime": 1779703142.4704795,
+      "sha1": "6815a858674c69fc5ff10015ca5e0e6f2fee0f4e"
+    }
+  },
+  "artifacts": {
+    "questionnaire_json": {
+      "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/tmp/runs/20260525-180213-2cf89386c687a6da-cab99788/questionnaire.json",
+      "mtime": 1779703333.2820244,
+      "sha1": "05d17a6847ab58d78e3492b467d84365e9f75d39"
+    },
+    "payload_json": {
+      "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/tmp/runs/20260525-180213-2cf89386c687a6da-cab99788/report_payload.json",
+      "mtime": 1779703333.2843559,
+      "sha1": "d940f620e7f7d3dcb2e60303c458bfce046dc976"
+    },
+    "output_docx": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/最终结果/问卷调研分析报告-心达康胶囊-安徽.docx"
+  }
+}

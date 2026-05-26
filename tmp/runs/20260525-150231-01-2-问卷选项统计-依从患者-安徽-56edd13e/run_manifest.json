@@ -1,0 +1,56 @@
+{
+  "skill_root": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill",
+  "run_dir": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/tmp/runs/20260525-150231-01-2-问卷选项统计-依从患者-安徽-56edd13e",
+  "scripts": {
+    "run_report_pipeline": {
+      "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/scripts/run_report_pipeline.py",
+      "mtime": 1779691344.1981218,
+      "sha1": "34d893454a32589d18f11ef91f41066085e7a58d"
+    },
+    "build_payload": {
+      "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/scripts/build_payload.py",
+      "mtime": 1779692453.230225,
+      "sha1": "9ffdc4eb8aed0a601eaba1c057730007a119fd55"
+    },
+    "render_from_template": {
+      "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/scripts/render_from_template.py",
+      "mtime": 1779692363.7667959,
+      "sha1": "9c10c8a59628c5be7d81f4f480763b11ffdd33e5"
+    },
+    "final_validate_docx": {
+      "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/scripts/final_validate_docx.py",
+      "mtime": 1779692374.0997393,
+      "sha1": "46ef22fdde945823a65209382df74a7ca6e5cffc"
+    }
+  },
+  "template_doc": {
+    "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/templates/efficacy-report-template.docx",
+    "mtime": 1779354943.4037328,
+    "sha1": "dbdcd0e5ab30c85a1a95584be7697d7d7553b2c6"
+  },
+  "inputs": {
+    "questionnaire_xlsx": {
+      "path": "/Users/lee/Library/Containers/com.tencent.WeWorkMac/Data/Documents/Profiles/2C845DF06A153B5BDD2C2AE53EEE60B6/Caches/Files/2026-05/345b8cd40fe4596c8050c95aabbfddb7/01-2. 问卷选项统计-依从患者-安徽.xlsx",
+      "mtime": 1779690098.914053,
+      "sha1": "326485dd9111806b592c256397cb0c46e136e6a2"
+    },
+    "report_content": {
+      "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/tmp/docs/xindakang_adherence_content.md",
+      "mtime": 1779691848.4020138,
+      "sha1": "34d795895accd182c0a8f7b35c25f2700a237e9c"
+    }
+  },
+  "artifacts": {
+    "questionnaire_json": {
+      "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/tmp/runs/20260525-150231-01-2-问卷选项统计-依从患者-安徽-56edd13e/questionnaire.json",
+      "mtime": 1779692551.5039475,
+      "sha1": "fa7c0d28d1ccaf601ea7871a86795b13a2c459a3"
+    },
+    "payload_json": {
+      "path": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/爱诺skill合集/JLK-Pt-skill/tmp/runs/20260525-150231-01-2-问卷选项统计-依从患者-安徽-56edd13e/report_payload.json",
+      "mtime": 1779692551.5061502,
+      "sha1": "cb35f657d64c2e21430c030427ad148e767cf5fe"
+    },
+    "output_docx": "/Users/lee/Library/Mobile Documents/com~apple~CloudDocs/测试一下/最终结果/问卷调研分析报告-心达康胶囊-安徽.docx"
+  }
+}

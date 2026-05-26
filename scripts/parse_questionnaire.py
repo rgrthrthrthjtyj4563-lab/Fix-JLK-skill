@@ -23,6 +23,26 @@ def normalize_pct(value: object) -> str:
         return f"{text}%"
 
 
+def _clean_number(value: object) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        number = float(value)
+        if number.is_integer():
+            return str(int(number))
+        return str(number)
+    except Exception:
+        return str(value).strip()
+
+
+def _find_total_col(ws, question_row: int) -> int | None:
+    for col in range(1, ws.max_column + 1):
+        value = ws.cell(question_row, col).value
+        if str(value or "").strip() == "总计":
+            return col
+    return None
+
+
 def parse_sheet(path: Path) -> dict:
     wb = load_workbook(path, data_only=True)
     ws = wb[wb.sheetnames[0]]
@@ -36,7 +56,8 @@ def parse_sheet(path: Path) -> dict:
         count_row = row + 1
         pct_row = row + 2
         options = []
-        total_value = ws.cell(count_row, 9).value
+        total_col = _find_total_col(ws, row)
+        total_value = ws.cell(count_row, total_col).value if total_col else None
         for col in range(3, ws.max_column + 1):
             raw = ws.cell(row, col).value
             if raw in (None, "", "总计"):
@@ -52,7 +73,7 @@ def parse_sheet(path: Path) -> dict:
                 {
                     "label": label,
                     "text": text,
-                    "count": str(ws.cell(count_row, col).value or ""),
+                    "count": _clean_number(ws.cell(count_row, col).value),
                     "pct": normalize_pct(ws.cell(pct_row, col).value),
                 }
             )
@@ -61,7 +82,7 @@ def parse_sheet(path: Path) -> dict:
                 "number": len(questions) + 1,
                 "question": str(q_text).strip(),
                 "options": options,
-                "total": None if total_value in (None, "") else str(total_value),
+                "total": _clean_number(total_value) or None,
             }
         )
         row += 3

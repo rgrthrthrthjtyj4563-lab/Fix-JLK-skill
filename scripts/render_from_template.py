@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 import re
 import shutil
 import tempfile
@@ -28,8 +29,9 @@ from typing import Optional
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Pt
+from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.text.paragraph import Paragraph
 
 
 # ─── OOXML Namespace constants ───────────────────────────────────────────────
@@ -183,6 +185,15 @@ def _replace_text_in_paragraph(p_element, old: str, new: str) -> bool:
     return True
 
 
+def _darken_hex(color: str, factor: float) -> str:
+    """Return a darker #rrggbb color for simple pseudo-3D chart depth."""
+    color = color.lstrip("#")
+    if len(color) != 6:
+        return "#666666"
+    channels = [max(0, min(255, int(int(color[index:index + 2], 16) * factor))) for index in (0, 2, 4)]
+    return "#" + "".join(f"{channel:02x}" for channel in channels)
+
+
 def _ensure_paragraph_rpr(p_element):
     for r in p_element.findall(qn("w:r")):
         rPr = r.find(qn("w:rPr"))
@@ -315,6 +326,8 @@ def _set_paragraph_style_props(
         jc.set(qn("w:val"), align)
     if body_layout:
         _apply_body_paragraph_layout(p_element, align=align or "both", first_line_chars=first_line_chars)
+
+
 
 
 # ─── Chart XML manipulation ──────────────────────────────────────────────────
@@ -793,29 +806,49 @@ class TemplateRenderer:
             self._replace_all_text("2025年12月11日", service_date)
 
     def replace_preface(self):
-        """Replace preface text with structured 4-section content."""
+        """Replace preface text while preserving the template title anchor."""
         preface = self.payload.get("preface", [])
         if not preface:
             return
 
-        # Find "前言" heading
         idx = self._find_anchor_index("前言")
         if idx is None:
             return
 
-        # Strip numPr from "前言" heading — it must not participate in numbering
         heading = self._get_paragraph_at(idx)
         _strip_numPr(heading)
         _set_paragraph_style_props(heading, "汉仪中宋简", 22, True, "center")
 
-        # The preface text is in the paragraph right after "前言"
-        text_idx = idx + 1
-        if text_idx not in self.anchors or self.anchors[text_idx]["type"] != "p":
+        title_idx = self._find_anchor_index("调查问卷分析报告", start=idx + 1)
+        if title_idx is None:
+            title_idx = idx + 2
+
+        body_paragraphs = []
+        for i in range(idx + 1, title_idx):
+            info = self.anchors.get(i)
+            if info and info["type"] == "p" and _get_paragraph_text(info["elem"]).strip():
+                body_paragraphs.append(info["elem"])
+
+        if not body_paragraphs:
             return
 
-        p = self._get_paragraph_at(text_idx)
-        _set_paragraph_text(p, preface[0])
-        _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
+        insert_before = self.anchors[title_idx]["elem"] if title_idx in self.anchors else body_paragraphs[-1]
+        template_paragraph = body_paragraphs[-1]
+        while len(body_paragraphs) < len(preface):
+            cloned = copy.deepcopy(template_paragraph)
+            insert_before.addprevious(cloned)
+            body_paragraphs.append(cloned)
+
+        for index, paragraph in enumerate(body_paragraphs):
+            if index < len(preface):
+                _set_paragraph_text(paragraph, preface[index])
+                _set_paragraph_style_props(paragraph, "汉仪中宋简", 12, False)
+            else:
+                parent = paragraph.getparent()
+                if parent is not None:
+                    parent.remove(paragraph)
+
+        self._rebuild_anchors()
 
     def replace_report_title(self):
         """Replace the report title paragraph."""
@@ -972,12 +1005,13 @@ class TemplateRenderer:
             _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
 
     def replace_analysis_sections(self):
-        """Replace all 4.x analysis sections.
+        """Replace all 4.x analysis sections in-place.
 
-        Walks body children sequentially. When a 4.x heading is found, scans
-        forward collecting subheadings, tables, and analysis paragraphs until
-        the next 4.x or 5.x heading. Matches payload data by section number
-        and replaces content block by block.
+        The result-analysis chapter is template-driven: keep the template's
+        headings, tables, drawings, and paragraph styles, and only replace
+        their content. If a payload section contains more subtopics than the
+        template section has blocks, clone the last template block in that
+        section and then replace the cloned content.
         """
         sections = self.payload.get("result_analysis", {}).get("sections", [])
         if not sections:
@@ -985,124 +1019,192 @@ class TemplateRenderer:
 
         import re
 
-        # Collect all body children (skip sectPr)
-        children = []
-        for child in self.body:
-            tag = child.tag.split("}")[1] if "}" in child.tag else child.tag
-            if tag == "sectPr":
-                break
-            children.append(child)
+        def local_tag(element) -> str:
+            return element.tag.split("}")[1] if "}" in element.tag else element.tag
 
-        # Build section-to-payload map
-        sec_map = {}
-        for sec in sections:
-            sec_map[sec.get("section_number", "")] = sec
+        def is_section_stop(element) -> bool:
+            if local_tag(element) != "p":
+                return False
+            stripped = _get_paragraph_text(element).strip()
+            return bool(
+                re.match(r"^(4\.\d+|5\.\d+)", stripped)
+                or stripped == "调研结果"
+                or stripped.startswith("附件1")
+                or stripped.startswith("附件2")
+                or stripped == "免责申明"
+            )
+
+        def is_subtopic_heading(element) -> bool:
+            if local_tag(element) != "p":
+                return False
+            stripped = _get_paragraph_text(element).strip()
+            pPr = element.find(qn("w:pPr"))
+            style_val = ""
+            if pPr is not None:
+                pStyle = pPr.find(qn("w:pStyle"))
+                if pStyle is not None:
+                    style_val = pStyle.get(qn("w:val"), "")
+            return style_val == "4" or "Heading" in style_val or bool(re.match(r"^[（(]\d+[)）]\s*", stripped))
+
+        def remove_element(element) -> None:
+            parent = element.getparent()
+            if parent is not None:
+                parent.remove(element)
+
+        def paragraph_has_visible_text(element) -> bool:
+            return local_tag(element) == "p" and bool(_get_paragraph_text(element).strip())
+
+        def collect_children():
+            collected = []
+            for child in self.body:
+                if local_tag(child) == "sectPr":
+                    break
+                collected.append(child)
+            return collected
+
+        def build_units(section_elements):
+            heading_positions = [
+                idx for idx, element in enumerate(section_elements)
+                if is_subtopic_heading(element)
+            ]
+            units = []
+            for pos, heading_pos in enumerate(heading_positions):
+                next_pos = heading_positions[pos + 1] if pos + 1 < len(heading_positions) else len(section_elements)
+                unit_elements = section_elements[heading_pos:next_pos]
+                units.append({"heading": section_elements[heading_pos], "elements": unit_elements})
+            intro_elements = section_elements[:heading_positions[0]] if heading_positions else section_elements
+            return intro_elements, units
+
+        def clone_missing_units(units, required_count, insert_before):
+            if not units or required_count <= len(units):
+                return
+            template_elements = units[-1]["elements"]
+            for _ in range(required_count - len(units)):
+                cloned_elements = [copy.deepcopy(element) for element in template_elements]
+                for cloned in cloned_elements:
+                    insert_before.addprevious(cloned)
+                cloned_heading = next((element for element in cloned_elements if is_subtopic_heading(element)), cloned_elements[0])
+                units.append({"heading": cloned_heading, "elements": cloned_elements})
+
+        def ensure_tables(unit, required_count, insert_before):
+            tables = [element for element in unit["elements"] if local_tag(element) == "tbl"]
+            if tables and len(tables) < required_count:
+                template_table = tables[-1]
+                last_element = unit["elements"][-1]
+                for _ in range(required_count - len(tables)):
+                    cloned_table = copy.deepcopy(template_table)
+                    last_element.addnext(cloned_table)
+                    unit["elements"].append(cloned_table)
+                    tables.append(cloned_table)
+                    last_element = cloned_table
+            return tables
+
+        sec_map = {sec.get("section_number", ""): sec for sec in sections}
+        children = collect_children()
 
         i = 0
         while i < len(children):
             child = children[i]
-            tag = child.tag.split("}")[1] if "}" in child.tag else child.tag
-
-            if tag != "p":
+            if child.getparent() is None or local_tag(child) != "p":
                 i += 1
                 continue
 
-            text = _get_paragraph_text(child)
-            m = re.match(r"4\.(\d+)", text)
-            if not m:
+            text = _get_paragraph_text(child).strip()
+            match = re.match(r"^(4\.\d+)", text)
+            if not match:
                 i += 1
                 continue
 
-            sec_num = m.group(0)  # e.g. "4.1"
+            sec_num = match.group(1)
+            block_end = i + 1
+            while block_end < len(children):
+                if children[block_end].getparent() is not None and is_section_stop(children[block_end]):
+                    break
+                block_end += 1
+
             payload_sec = sec_map.get(sec_num)
-            if not payload_sec:
-                i += 1
+            if payload_sec is None:
+                for element in children[i:block_end]:
+                    remove_element(element)
+                i = block_end
                 continue
 
-            # Collect blocks for this section
+            section_title = payload_sec.get("section_title", "")
+            _set_paragraph_text(child, f"{sec_num} {section_title}".strip())
+            _set_paragraph_style_props(child, "汉仪中宋简", 16, True, "left")
+
             subtopics = payload_sec.get("subtopics", [])
             visual_groups = payload_sec.get("visual_groups", [])
-            section_q_lookup = {}
-            for vg in visual_groups:
-                td = vg.get("table_data", {})
-                q_num = td.get("number", "")
-                if q_num:
-                    section_q_lookup[str(q_num)] = vg
+            visual_by_ref = {
+                visual.get("question_ref"): visual
+                for visual in visual_groups
+                if visual.get("question_ref")
+            }
 
-            # Walk forward collecting subheadings, tables, and paragraphs
-            i += 1  # skip the 4.x heading itself
-            blocks = []  # [("heading", text), ("table", ref), ("para", text)]
-            while i < len(children):
-                c = children[i]
-                ct = c.tag.split("}")[1] if "}" in c.tag else c.tag
-                ct_text = _get_paragraph_text(c) if ct == "p" else ""
+            section_elements = [element for element in children[i + 1:block_end] if element.getparent() is not None]
+            intro_elements, units = build_units(section_elements)
+            for element in intro_elements:
+                if paragraph_has_visible_text(element) or local_tag(element) == "tbl":
+                    remove_element(element)
 
-                # Stop at next 4.x or 5.x heading
-                if ct == "p":
-                    stripped = ct_text.strip()
-                    if re.match(r"(4\.\d+|5\.\d+)", stripped) or any(marker in stripped for marker in ["调研结果", "附件1", "附件2", "免责申明"]):
-                        break
-                    # Check heading style
-                    pPr = c.find(qn("w:pPr"))
-                    style_val = ""
-                    if pPr is not None:
-                        pStyle = pPr.find(qn("w:pStyle"))
-                        if pStyle is not None:
-                            style_val = pStyle.get(qn("w:val"), "")
-                    if style_val == "4" or "Heading" in style_val or re.match(r"^[（(]\d+[)）]\s*", stripped):
-                        blocks.append(("heading", c, ct_text))
-                    elif ct_text.strip():
-                        blocks.append(("para", c, ct_text))
-                    else:
-                        blocks.append(("empty", c, ""))
-                elif ct == "tbl":
-                    # Extract question number from first cell
-                    first_t = c.find(f".//{qn('w:t')}")
-                    first_text = (first_t.text or "") if first_t is not None else ""
-                    # Try to extract question number like "1." or "2."
-                    q_match = re.match(r"(\d+)\.", first_text)
-                    q_ref = q_match.group(1) if q_match else ""
-                    blocks.append(("table", c, q_ref))
+            insert_before = children[block_end] if block_end < len(children) else None
+            if insert_before is not None and insert_before.getparent() is not None:
+                clone_missing_units(units, len(subtopics), insert_before)
 
-                i += 1
-
-            # Now match blocks against payload
-            st_idx = 0
-            intro_pool = list(payload_sec.get("section_intro", []))
-            had_section_intro = bool(intro_pool)
-            para_pool = intro_pool  # paragraphs to assign
-            in_subtopic_body = False
-            used_question_numbers = set()
-
-            for block_type, elem, ref in blocks:
-                if block_type == "heading" and st_idx < len(subtopics):
-                    st = subtopics[st_idx]
-                    _set_paragraph_text(elem, st.get("subtitle", ""))
-                    _set_paragraph_style_props(elem, "汉仪中宋简", 12, False, "left")
-                    para_pool = list(st.get("paragraphs", []))
-                    st_idx += 1
-                    in_subtopic_body = True
-                elif block_type == "heading":
-                    elem.getparent().remove(elem)
-                elif block_type == "table":
-                    vg = section_q_lookup.get(ref)
-                    if vg is None or ref in used_question_numbers:
-                        elem.getparent().remove(elem)
-                        continue
-                    used_question_numbers.add(ref)
-                    self._replace_table_element(elem, vg)
-                    in_subtopic_body = True
-                elif block_type == "para" and para_pool:
-                    _set_paragraph_text(elem, para_pool.pop(0))
-                    _set_paragraph_style_props(elem, "汉仪中宋简", 12, False)
-                elif block_type == "para":
-                    if in_subtopic_body or had_section_intro:
-                        elem.getparent().remove(elem)
-                    # else keep section separators/blank template flow only when no intro exists
-                elif block_type == "empty":
+            for unit_idx, unit in enumerate(units):
+                if unit_idx >= len(subtopics):
+                    for element in unit["elements"]:
+                        remove_element(element)
                     continue
 
-            # i is already positioned after this section's blocks
+                subtopic = subtopics[unit_idx]
+                subtitle = subtopic.get("subtitle", "")
+                _set_paragraph_text(unit["heading"], f"（{unit_idx + 1}） {subtitle}".strip())
+                _strip_numPr(unit["heading"])
+                _set_paragraph_style_props(unit["heading"], "汉仪中宋简", 12, True, "left")
+
+                question_refs = subtopic.get("question_refs", [])
+                tables = ensure_tables(unit, len(question_refs), unit["heading"])
+                for table_idx, table in enumerate(tables):
+                    if table_idx < len(question_refs):
+                        visual = visual_by_ref.get(question_refs[table_idx])
+                        if visual is not None:
+                            self._replace_table_element(table, visual)
+                        else:
+                            remove_element(table)
+                    else:
+                        remove_element(table)
+
+                body_paragraphs = [
+                    element for element in unit["elements"]
+                    if local_tag(element) == "p"
+                    and element is not unit["heading"]
+                    and not _paragraph_has_drawing(element)
+                    and paragraph_has_visible_text(element)
+                    and element.getparent() is not None
+                ]
+                empty_paragraphs = [
+                    element for element in unit["elements"]
+                    if local_tag(element) == "p"
+                    and element is not unit["heading"]
+                    and not _paragraph_has_drawing(element)
+                    and not paragraph_has_visible_text(element)
+                    and element.getparent() is not None
+                ]
+                for empty_paragraph in empty_paragraphs:
+                    remove_element(empty_paragraph)
+
+                paragraphs = [text for text in subtopic.get("paragraphs", []) if text and text.strip()]
+                for para_idx, paragraph in enumerate(body_paragraphs):
+                    if para_idx < len(paragraphs):
+                        _set_paragraph_text(paragraph, paragraphs[para_idx])
+                        _set_paragraph_style_props(paragraph, "汉仪中宋简", 12, False)
+                    else:
+                        remove_element(paragraph)
+
+            i = block_end
+
+        self._rebuild_anchors()
 
     def _strip_cell_numPr(self, cell_elem):
         """Remove <w:numPr> from all paragraphs in a table cell to prevent
@@ -1224,6 +1326,219 @@ class TemplateRenderer:
             ref_child.addprevious(new_p)
             _set_paragraph_style_props(new_p, "汉仪中宋简", 16, True, "left")
 
+    def _make_chart_png(self, chart: dict, output_path: Path, role: str = "overview") -> Optional[Path]:
+        categories = [str(value) for value in chart.get("categories", []) if str(value)]
+        values = [float(value) for value in chart.get("values", [])]
+        if not categories or not values:
+            return None
+        item_count = min(len(categories), len(values))
+        categories = categories[:item_count]
+        values = values[:item_count]
+
+        import os
+        cache_root = Path(tempfile.gettempdir()) / "jlk_mpl_cache"
+        cache_root.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault("MPLCONFIGDIR", str(cache_root / "mplconfig"))
+        os.environ.setdefault("XDG_CACHE_HOME", str(cache_root / "xdg"))
+        os.environ.setdefault("FC_CACHEDIR", str(cache_root / "fontconfig"))
+        Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
+        Path(os.environ["XDG_CACHE_HOME"]).mkdir(parents=True, exist_ok=True)
+        Path(os.environ["FC_CACHEDIR"]).mkdir(parents=True, exist_ok=True)
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        plt.rcParams["font.sans-serif"] = ["Arial Unicode MS", "PingFang SC", "Heiti TC", "SimHei", "DejaVu Sans"]
+        plt.rcParams["axes.unicode_minus"] = False
+
+        title = chart.get("title", "")
+        chart_type = chart.get("chart_type", "bar")
+        blue = "#5aa9e6"
+        pie_colors = ["#5b57f2", "#58d99a", "#ffda4d", "#ff9a40", "#5aa9e6", "#66d0a4", "#617594", "#a9d18e"]
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if chart_type == "pie":
+            fig, ax = plt.subplots(figsize=(6.90, 4.51), dpi=160)
+            colors = pie_colors[:len(categories)]
+            if role == "overview":
+                wedges, _ = ax.pie(
+                    values,
+                    startangle=90,
+                    counterclock=False,
+                    colors=colors,
+                    radius=0.86,
+                    wedgeprops={"linewidth": 1.0, "edgecolor": "white"},
+                )
+                total = sum(values)
+                for wedge, value, color in zip(wedges, values, colors):
+                    if not total:
+                        continue
+                    percent = value / total * 100
+                    angle = math.radians((wedge.theta1 + wedge.theta2) / 2)
+                    x, y = math.cos(angle), math.sin(angle)
+                    start = (0.86 * x, 0.86 * y)
+                    mid = (1.02 * x, 1.02 * y)
+                    end = (1.20 * (1 if x >= 0 else -1), 1.02 * y)
+                    ax.plot([start[0], mid[0], end[0]], [start[1], mid[1], end[1]], color=color, linewidth=1.4)
+                    ax.text(
+                        end[0] + (0.04 if x >= 0 else -0.04),
+                        end[1],
+                        f"{percent:.0f}%",
+                        ha="left" if x >= 0 else "right",
+                        va="center",
+                        fontsize=12,
+                        color="#777777",
+                    )
+                handles = [
+                    plt.Line2D([0], [0], marker="o", linestyle="", markersize=8, markerfacecolor=color, markeredgecolor=color)
+                    for color in colors
+                ]
+                ax.legend(
+                    handles,
+                    categories,
+                    loc="lower center",
+                    bbox_to_anchor=(0.5, -0.12),
+                    ncol=4,
+                    frameon=False,
+                    fontsize=10,
+                    handlelength=0.8,
+                    columnspacing=1.1,
+                    handletextpad=0.4,
+                )
+                ax.set_xlim(-1.45, 1.45)
+                ax.set_ylim(-1.28, 1.25)
+            else:
+                depth = 0.08
+                dark_colors = [_darken_hex(color, 0.72) for color in colors]
+                for layer in range(8, 0, -1):
+                    ax.pie(
+                        values,
+                        startangle=90,
+                        colors=dark_colors,
+                        radius=0.82,
+                        center=(0, 0.04 - depth * layer / 8),
+                        wedgeprops={"linewidth": 0.5, "edgecolor": "white"},
+                    )
+                ax.pie(
+                    values,
+                    labels=categories,
+                    autopct=lambda pct: f"{pct:.1f}%" if pct >= 3 else "",
+                    startangle=90,
+                    colors=colors,
+                    radius=0.82,
+                    center=(0, 0.04),
+                    pctdistance=0.62,
+                    labeldistance=1.18,
+                    textprops={"fontsize": 8.5, "color": "#111111"},
+                    wedgeprops={"linewidth": 0.8, "edgecolor": "white"},
+                )
+                if title:
+                    ax.set_title(title, fontsize=12, pad=8)
+            ax.axis("equal")
+            fig.subplots_adjust(left=0.04, right=0.96, top=0.90, bottom=0.18)
+        else:
+            fig_height = max(4.05, 0.48 * len(categories) + 0.95)
+            fig, ax = plt.subplots(figsize=(6.93, fig_height), dpi=160)
+            y_pos = list(range(len(categories)))
+            ax.barh(y_pos, values, color=blue, edgecolor=blue, height=0.56, label="值")
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(categories, fontsize=11, color="#666666")
+            ax.invert_yaxis()
+            ax.grid(axis="x", color="#e6e6e6", linewidth=1.0)
+            ax.set_axisbelow(True)
+            for spine in ["top", "right"]:
+                ax.spines[spine].set_visible(False)
+            ax.spines["left"].set_color("#bfbfbf")
+            ax.spines["bottom"].set_color("#bfbfbf")
+            ax.tick_params(axis="y", length=0)
+            ax.tick_params(axis="x", colors="#777777", labelsize=10)
+            max_value = max(float(v) for v in values) if values else 0
+            ax.set_xlim(0, max_value * 1.08 if max_value else 1)
+            for y, value in enumerate(values):
+                ax.text(float(value) + (max_value * 0.012 if max_value else 0.02), y, f"{value:g}", va="center", fontsize=11, color="#666666")
+            ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.22), frameon=False, fontsize=10, handlelength=0.8)
+            if title and role != "overview":
+                ax.set_title(title, fontsize=12, pad=10)
+            fig.subplots_adjust(left=0.28, right=0.96, top=0.96, bottom=0.20)
+
+        fig.savefig(output_path, facecolor="white")
+        plt.close(fig)
+        return output_path
+
+    def _replace_paragraph_with_image(self, paragraph_element, image_path: Path, width_inches: float = 5.75) -> None:
+        for run in list(paragraph_element.findall(qn("w:r"))):
+            paragraph_element.remove(run)
+        paragraph = Paragraph(paragraph_element, self.doc._body)
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = paragraph.add_run()
+        run.add_picture(str(image_path), width=Inches(width_inches))
+
+    def replace_native_charts_with_pngs(self) -> None:
+        result_analysis = self.payload.get("result_analysis", {})
+        overview_charts = result_analysis.get("overview_charts", [])
+        if not overview_charts:
+            return
+
+        chart_dir = Path(tempfile.mkdtemp(prefix="jlk_charts_"))
+        overview_pngs = []
+        for idx, chart in enumerate(overview_charts[:2]):
+            png = self._make_chart_png(chart, chart_dir / f"overview_{idx + 1}.png", role="overview")
+            if png:
+                overview_pngs.append(png)
+
+        drawing_paragraphs = []
+        found_intro = False
+        for child in self.body:
+            if child.tag.split("}")[-1] == "sectPr":
+                break
+            if child.tag.split("}")[-1] != "p":
+                continue
+            text = _get_paragraph_text(child).strip()
+            if "数据可视化" in text:
+                found_intro = True
+                continue
+            if found_intro and re.match(r"^4\.\d+", text):
+                break
+            if found_intro and _paragraph_has_drawing(child):
+                drawing_paragraphs.append(child)
+
+        for idx, png in enumerate(overview_pngs):
+            if idx < len(drawing_paragraphs):
+                self._replace_paragraph_with_image(drawing_paragraphs[idx], png)
+
+        for extra in drawing_paragraphs[len(overview_pngs):]:
+            if extra.getparent() is not None:
+                extra.getparent().remove(extra)
+
+        key_issue_items = self.payload.get("summary", {}).get("key_issue_items", [])
+        if not key_issue_items:
+            self._rebuild_anchors()
+            return
+
+        self._rebuild_anchors()
+        start_idx = self._find_exact_paragraph_index("5.1问卷重点问题分析")
+        end_idx = self._find_exact_paragraph_index("5.2调研结果分析", start=(start_idx + 1) if start_idx is not None else 0)
+        if start_idx is None or end_idx is None or end_idx <= start_idx:
+            self._rebuild_anchors()
+            return
+
+        insert_before = self._get_paragraph_at(start_idx + 1) if start_idx + 1 < end_idx else self._get_paragraph_at(end_idx)
+        for idx, item in enumerate(key_issue_items[:2]):
+            chart = {
+                "title": item.get("chart_title", ""),
+                "chart_type": item.get("chart_type", "pie"),
+                "categories": item.get("categories", []),
+                "values": item.get("values", []),
+            }
+            png = self._make_chart_png(chart, chart_dir / f"key_issue_{idx + 1}.png", role="key_issue")
+            if not png:
+                continue
+            image_p = OxmlElement("w:p")
+            insert_before.addprevious(image_p)
+            self._replace_paragraph_with_image(image_p, png)
+
+        self._rebuild_anchors()
+
     def _replace_key_issue_section(self, key_issue_items: list[dict]):
         start_idx = self._find_exact_paragraph_index("5.1问卷重点问题分析")
         end_idx = self._find_exact_paragraph_index("5.2调研结果分析", start=(start_idx + 1) if start_idx is not None else 0)
@@ -1240,24 +1555,20 @@ class TemplateRenderer:
                 continue
             text_paragraphs.append(paragraph)
 
-        replacement_paragraphs = []
-        for item in key_issue_items:
-            replacement_paragraphs.append(item.get("heading", "重点问题分析"))
-            replacement_paragraphs.append(item.get("paragraph", ""))
+        replacement_paragraphs = [item.get("paragraph", "") for item in key_issue_items]
 
         insert_before = self._get_paragraph_at(end_idx)
         for pi, text in enumerate(replacement_paragraphs):
-            is_heading = pi % 2 == 0
             if pi < len(text_paragraphs):
                 _set_paragraph_text(text_paragraphs[pi], text)
                 _set_paragraph_style_props(
                     text_paragraphs[pi],
                     "汉仪中宋简",
                     12,
-                    is_heading,
-                    "left" if is_heading else "both",
-                    body_layout=not is_heading,
-                    first_line_chars=0 if is_heading else 200,
+                    False,
+                    "both",
+                    body_layout=True,
+                    first_line_chars=200,
                 )
             else:
                 new_p = OxmlElement("w:p")
@@ -1272,10 +1583,10 @@ class TemplateRenderer:
                     new_p,
                     "汉仪中宋简",
                     12,
-                    is_heading,
-                    "left" if is_heading else "both",
-                    body_layout=not is_heading,
-                    first_line_chars=0 if is_heading else 200,
+                    False,
+                    "both",
+                    body_layout=True,
+                    first_line_chars=200,
                 )
 
         for extra in text_paragraphs[len(replacement_paragraphs):]:
@@ -1349,56 +1660,58 @@ class TemplateRenderer:
         if not questions:
             return
 
-        # Find "附件1" heading
         idx = self._find_anchor_index("附件1")
         if idx is None:
             return
 
-        # Attachment1 name
         att_name = attachments.get("attachment1_name", "")
         if att_name:
             p = self._get_paragraph_at(idx)
             _set_paragraph_text(p, f"附件1：{att_name}")
             _set_paragraph_style_props(p, "汉仪中宋简", 16, True, "left")
 
-        # Replace question paragraphs after heading
-        qi = 0
-        for i in range(idx + 1, idx + 200):
-            if i not in self.anchors:
-                break
-            info = self.anchors[i]
-            if info["type"] == "p" and "附件2" in info["text"]:
-                break
-            if info["type"] != "p":
-                continue
-            text = info["text"].strip()
-            if not text:
-                continue
+        attachment2_idx = self._find_anchor_index("附件2", start=idx + 1)
+        if attachment2_idx is None:
+            return
 
-            if qi < len(questions):
-                q = questions[qi]
-                if text.startswith(("A.", "B.", "C.", "D.", "E.", "F.")) or text.startswith("同时服用"):
-                    # Option line
-                    pass  # handled below
-                else:
-                    # Question line
-                    p = self._get_paragraph_at(i)
-                    _set_paragraph_text(p, q.get("question", ""))
-                    _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
+        desired: list[str] = []
+        for display_index, question in enumerate(questions, start=1):
+            question_text = re.sub(r"^\s*\d+\s*[\.．、]\s*", "", str(question.get("question", "")).strip())
+            desired.append(f"（{display_index}） {question_text}")
+            for option in question.get("options", []):
+                desired.append(f"{option.get('code', '')}. {option.get('text', '')}")
 
-                # Now handle option lines
-                options = q.get("options", [])
-                oi = i + 1
-                for opt in options:
-                    if oi in self.anchors and self.anchors[oi]["type"] == "p":
-                        op = self._get_paragraph_at(oi)
-                        opt_text = f"{opt.get('code', '')}. {opt.get('text', '')}"
-                        _set_paragraph_text(op, opt_text)
-                        _set_paragraph_style_props(op, "汉仪中宋简", 12, False)
-                        oi += 1
-                    else:
-                        break
-                qi += 1
+        target_paragraphs = []
+        for i in range(idx + 1, attachment2_idx):
+            info = self.anchors.get(i)
+            if not info or info["type"] != "p":
+                continue
+            paragraph = info["elem"]
+            if _paragraph_has_drawing(paragraph):
+                continue
+            if _get_paragraph_text(paragraph).strip():
+                target_paragraphs.append(paragraph)
+
+        if not target_paragraphs:
+            return
+
+        insert_before = self.anchors[attachment2_idx]["elem"]
+        template_paragraph = target_paragraphs[-1]
+        while len(target_paragraphs) < len(desired):
+            cloned = copy.deepcopy(template_paragraph)
+            insert_before.addprevious(cloned)
+            target_paragraphs.append(cloned)
+
+        for index, paragraph in enumerate(target_paragraphs):
+            if index < len(desired):
+                _set_paragraph_text(paragraph, desired[index])
+                _set_paragraph_style_props(paragraph, "汉仪中宋简", 12, False)
+            else:
+                parent = paragraph.getparent()
+                if parent is not None:
+                    parent.remove(paragraph)
+
+        self._rebuild_anchors()
 
     def replace_disclaimer(self):
         """Replace disclaimer section."""
@@ -1526,6 +1839,23 @@ class TemplateRenderer:
         if parts:
             print(f"[formatting] Applied uniform format: {', '.join(parts)}")
 
+    def _apply_global_font_name(self):
+        """Normalize visible run font names without changing size or weight."""
+        for run in self.body.iter(qn("w:r")):
+            if not "".join(t.text or "" for t in run.findall(qn("w:t"))).strip():
+                continue
+            rPr = run.find(qn("w:rPr"))
+            if rPr is None:
+                rPr = OxmlElement("w:rPr")
+                run.insert(0, rPr)
+            rFonts = rPr.find(qn("w:rFonts"))
+            if rFonts is None:
+                rFonts = OxmlElement("w:rFonts")
+                rPr.append(rFonts)
+            rFonts.set(qn("w:ascii"), "汉仪中宋简")
+            rFonts.set(qn("w:hAnsi"), "汉仪中宋简")
+            rFonts.set(qn("w:eastAsia"), "汉仪中宋简")
+
     def _apply_red_font_replacements(self):
         """Apply red-font variable replacements across ALL text in the document.
         
@@ -1617,8 +1947,7 @@ class TemplateRenderer:
         result_analysis = self.payload.get("result_analysis", {})
         sections = result_analysis.get("sections", [])
 
-        # Chart 1 (at body[35]): usually the first dimension's first question
-        # Chart 2 (at body[100]): usually in 5.1, cross-analysis of two dimensions
+        # Chart 1/2 are the result-analysis overview charts in the template.
 
         if not sections:
             return
@@ -1631,50 +1960,51 @@ class TemplateRenderer:
                 if question_ref and table_data:
                     q_lookup[question_ref] = table_data
 
-        key_issue_items = self.payload.get("summary", {}).get("key_issue_items", [])
-        chart_bindings = [("word/charts/chart1.xml", 0), ("word/charts/chart2.xml", 1)]
-        for chart_path, item_index in chart_bindings:
-            if item_index >= len(key_issue_items):
+        overview_charts = result_analysis.get("overview_charts", [])
+        overview_bindings = [("word/charts/chart1.xml", 0), ("word/charts/chart2.xml", 1)]
+        for chart_path, chart_index in overview_bindings:
+            if chart_index >= len(overview_charts):
                 continue
-            item = key_issue_items[item_index]
-            table_data = q_lookup.get(item.get("question_ref"))
-            if not table_data:
-                continue
-            chart_options = table_data.get("options", [])
-            if not chart_options:
-                continue
-            labels = [f"{o['code']}.{o['text']}" for o in chart_options]
-            values = [float(str(o.get("pct", "0")).rstrip("%")) for o in chart_options]
-            title = item.get("chart_title") or table_data.get("question", "图表")
-            self._update_chart_in_zip(
-                output_docx,
-                chart_path,
-                labels,
-                values,
-                title,
-            )
+            overview = overview_charts[chart_index]
+            categories = overview.get("categories", [])
+            values = overview.get("values", [])
+            if categories and values:
+                self._update_chart_in_zip(
+                    output_docx,
+                    chart_path,
+                    categories,
+                    values,
+                    overview.get("title") or "问卷结果分析维度占比图",
+                )
 
     def _update_chart_in_zip(self, docx_path: Path, chart_path_in_zip: str, categories: list, values: list, title: str):
         """Extract, modify, and replace chart XML inside the docx ZIP."""
         tmp_path = docx_path.with_suffix(".tmp.docx")
 
         with zipfile.ZipFile(docx_path, "r") as zin:
+            names = set(zin.namelist())
+            source_chart = chart_path_in_zip if chart_path_in_zip in names else "word/charts/chart1.xml"
+            chart_data = zin.read(source_chart)
+            with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tf:
+                tf.write(chart_data)
+                tf_path = Path(tf.name)
+            try:
+                _update_chart_data(tf_path, categories, values, title)
+                updated_chart_data = tf_path.read_bytes()
+            finally:
+                tf_path.unlink()
+
             with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
+                wrote_chart = False
                 for item in zin.infolist():
                     data = zin.read(item.filename)
                     if item.filename == chart_path_in_zip:
-                        # Save chart XML to temp file, modify, read back
-                        with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tf:
-                            tf.write(data)
-                            tf_path = Path(tf.name)
-                        try:
-                            _update_chart_data(tf_path, categories, values, title)
-                            data = tf_path.read_bytes()
-                        finally:
-                            tf_path.unlink()
+                        data = updated_chart_data
+                        wrote_chart = True
                     zout.writestr(item, data)
+                if not wrote_chart:
+                    zout.writestr(chart_path_in_zip, updated_chart_data)
 
-        # Replace original
         docx_path.unlink()
         tmp_path.rename(docx_path)
 
@@ -1725,6 +2055,8 @@ class TemplateRenderer:
         self._rebuild_anchors()
         self.replace_summary()
         self._rebuild_anchors()
+        self.replace_native_charts_with_pngs()
+        self._rebuild_anchors()
         self.replace_attachments()
         
         # Phase 1.4: Uniform paragraph formatting (all body text: 两端对齐,
@@ -1742,6 +2074,7 @@ class TemplateRenderer:
         self.restyle_key_issue_titles()
         self._rebuild_anchors()
         self.replace_disclaimer()
+        self._apply_global_font_name()
 
         # Save
         self.doc.save(str(output_path))
@@ -1749,9 +2082,9 @@ class TemplateRenderer:
         # Phase 2: Global XML-level text cleanup (catch anything missed)
         self._global_replace_in_xml(output_path)
 
-        # Phase 3: Enable field updates and update chart data in ZIP
+        # Phase 3: Enable field updates on open. Charts are rendered as PNG
+        # images in the document body to avoid platform-specific Office chart drift.
         self._enable_update_fields_on_open(output_path)
-        self.update_charts(output_path)
 
         return output_path
 
