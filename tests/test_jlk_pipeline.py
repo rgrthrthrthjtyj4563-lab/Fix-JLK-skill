@@ -69,6 +69,46 @@ def expected_result_table_questions(payload: dict) -> list[str]:
     return expected
 
 
+AI_KEY_ISSUE_PARAGRAPH_1 = (
+    "血压控制相关重点问题反映出患者对厄贝沙坦氢氯噻嗪片真实使用效果的核心判断。"
+    "从样本反馈看，正向评价集中度较高，说明多数患者能够在日常监测和自身感受中形成较稳定的控压认知，"
+    "产品使用体验具备较好的患者基础。与此同时，少数患者仍然表现出对血压波动的谨慎感受，"
+    "这类反馈提示后续沟通不能只停留在总体疗效呈现，还需要结合复诊记录、家庭监测和用药执行情况进行解释。"
+    "对于区域样本而言，这一问题还能够帮助判断患者是否真正理解治疗目标，以及是否能够把血压变化与规范服药联系起来。"
+    "综合判断，该问题的管理价值在于把已有正向体验转化为更稳定的长期信任，并识别需要持续随访的波动样本。"
+)
+
+
+AI_KEY_ISSUE_PARAGRAPH_2 = (
+    "不良反应相关重点问题主要体现患者对长期用药耐受性的实际感知。"
+    "当前反馈显示，多数患者并未将头晕头痛等不适视为持续用药的主要障碍，说明安全性体验整体较为平稳，"
+    "也为后续维持治疗连续性提供了基础。需要关注的是，低频不适虽然没有形成普遍压力，"
+    "但在个体患者中仍可能影响服药信心和复诊沟通质量，尤其当患者缺少明确解释时，轻微症状也可能被放大为停药顾虑。"
+    "因此，报告需要把主流稳定体验和少数敏感反馈同时呈现，避免用平均判断掩盖个体管理需求。"
+    "因此，该重点问题应被用于识别敏感人群和优化说明方式，使患者能够在理解风险边界的基础上保持规范用药。"
+)
+
+
+AI_ADHERENCE_KEY_ISSUE_1 = (
+    "漏服应对问题集中反映了患者在真实用药场景中的执行稳定性。"
+    "从反馈结构看，多数患者能够选择较为合理的补救方式，说明基础依从意识已经形成，"
+    "但仍有部分患者存在跳过剂量、加倍补服或处理方式不确定等表现，这类行为虽然不是主流，"
+    "却可能在长期治疗中累积为疗程中断和剂量波动风险。该问题的重点不在于简单评价患者是否听从医嘱，"
+    "而在于识别患者面对突发漏服时是否具备清晰、可执行的处理规则。综合判断，后续分析应围绕标准化漏服指引和提醒支持展开，"
+    "同时关注不同年龄和信息来源患者的理解差异，帮助患者把正确认知落实到具体行动之中。"
+)
+
+
+AI_ADHERENCE_KEY_ISSUE_2 = (
+    "依从性提升需求体现了患者对长期用药支持体系的真实期待。"
+    "样本反馈显示，健康教育资料、副作用解释和提醒工具等需求较为突出，说明患者并不只是被动接受治疗安排，"
+    "而是希望获得更清晰、更连续的外部支持。对于心达康胶囊这类需要稳定服用的品种而言，"
+    "依从性问题往往同时受到药物认知、用药体验和日常提醒方式影响，单一宣教很难完全解决。"
+    "如果支持内容缺少场景化解释，患者即使知道需要规律服药，也可能在症状变化或生活节奏变化时出现执行松动。"
+    "综合判断，该重点问题应作为后续患者管理优化的入口，通过分层教育、风险解释和提醒机制协同提升长期用药连续性。"
+)
+
+
 def efficacy_questionnaire() -> dict:
     questions = [
         "您服用厄贝沙坦氢氯噻嗪片后，血压控制效果如何？",
@@ -136,7 +176,7 @@ def adherence_questionnaire() -> dict:
 
 
 def sample_markdown() -> str:
-    return """---
+    return f"""---
 product: 厄贝沙坦氢氯噻嗪片
 region: 北京市
 time: 2025.10
@@ -254,7 +294,9 @@ disclaimer_unit: 北京玖麟空科技有限公司
 
 ### 5.1问卷重点问题分析
 
-本次问卷重点问题主要集中在用药行为与习惯及用药指导信息评价两个层面。
+{AI_KEY_ISSUE_PARAGRAPH_1}
+
+{AI_KEY_ISSUE_PARAGRAPH_2}
 
 ### 5.2调研结果分析
 
@@ -266,7 +308,20 @@ disclaimer_unit: 北京玖麟空科技有限公司
 """
 
 
-def minimal_markdown(product: str = "心达康胶囊", region: str = "安徽省") -> str:
+def minimal_markdown(product: str = "心达康胶囊", region: str = "安徽省", include_key_issue: bool = True) -> str:
+    key_issue = (
+        f"""
+## 调研结果
+
+### 5.1问卷重点问题分析
+
+{AI_ADHERENCE_KEY_ISSUE_1}
+
+{AI_ADHERENCE_KEY_ISSUE_2}
+"""
+        if include_key_issue
+        else ""
+    )
     return f"""---
 product: {product}
 region: {region}
@@ -274,6 +329,7 @@ survey_period: 2026年5月13日至5月31日
 valid_count: 1000
 disclaimer_unit: 北京玖麟空科技有限公司
 ---
+{key_issue}
 """
 
 
@@ -428,7 +484,8 @@ class PipelineTest(unittest.TestCase):
         self.assertLessEqual(service_dt, date(2025, 11, 30))
         self.assertEqual(payload["disclaimer"]["unit"], payload["service"]["unit"])
         self.assertEqual(payload["disclaimer"]["date"], payload["service"]["date"])
-        self.assertEqual(payload["summary"]["key_issue_analysis"], payload["summary"]["key_issue_analysis_programmatic"])
+        self.assertEqual(payload["summary"]["key_issue_analysis"], [AI_KEY_ISSUE_PARAGRAPH_1, AI_KEY_ISSUE_PARAGRAPH_2])
+        self.assertNotEqual(payload["summary"]["key_issue_analysis"], payload["summary"]["key_issue_analysis_programmatic"])
         self.assertEqual(len(payload["summary"]["key_issue_items"]), 2)
         self.assertEqual(payload["summary"]["key_issue_items"][0]["heading"], "1. 血压控制现状与特征")
         self.assertEqual(payload["summary"]["key_issue_items"][1]["heading"], "2. 不良反应发生率")
@@ -439,7 +496,7 @@ class PipelineTest(unittest.TestCase):
         self.assertGreaterEqual(len(payload["summary"]["overall_analysis"]), 2)
         self.assertLessEqual(sum(len(paragraph) for paragraph in payload["summary"]["overall_analysis"]), 700)
         self.assertEqual(payload["summary"]["overall_analysis"], payload["summary"]["overall_analysis_programmatic"])
-        self.assertEqual(len(payload["summary"]["key_issue_analysis"]), 4)
+        self.assertEqual(len(payload["summary"]["key_issue_analysis"]), 2)
         self.assertEqual(len(payload["summary"]["recommendations"]), 3)
         subtopic_lookup = {
             subtopic["subtitle"]: subtopic["paragraphs"]
@@ -502,6 +559,51 @@ class PipelineTest(unittest.TestCase):
             self.assertGreaterEqual(len(paragraph), MIN_ANALYSIS_CHARS)
             self.assertLessEqual(len(paragraph), MAX_ANALYSIS_CHARS)
             self.assertTrue(is_complete_analysis(paragraph))
+
+    def test_build_payload_requires_ai_key_issue_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(minimal_markdown(include_key_issue=False), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            with self.assertRaisesRegex(ValueError, "5\\.1"):
+                build_payload(
+                    adherence_questionnaire(),
+                    meta,
+                    content,
+                    Namespace(
+                        product=None,
+                        region=None,
+                        time=None,
+                        attachment_name=None,
+                        survey_period=None,
+                        sample_size=None,
+                        valid_count=None,
+                        disclaimer_unit=None,
+                    ),
+                )
+
+    def test_build_payload_rejects_invalid_ai_key_issue_analysis_length(self) -> None:
+        bad_content = minimal_markdown().replace(AI_ADHERENCE_KEY_ISSUE_1, "过短的重点问题分析。")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(bad_content, encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            with self.assertRaisesRegex(ValueError, "5\\.1"):
+                build_payload(
+                    adherence_questionnaire(),
+                    meta,
+                    content,
+                    Namespace(
+                        product=None,
+                        region=None,
+                        time=None,
+                        attachment_name=None,
+                        survey_period=None,
+                        sample_size=None,
+                        valid_count=None,
+                        disclaimer_unit=None,
+                    ),
+                )
 
     def test_build_payload_rejects_conflicting_draft_structure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -600,6 +702,11 @@ class PipelineTest(unittest.TestCase):
             self.assertLess(texts.index(f"服务单位：{payload['service']['unit']}"), texts.index(f"日期：{payload['service']['date']}"))
             self.assertIn(f"服务提供单位:{payload['service']['unit']}", texts)
             self.assertIn(payload["service"]["date"], texts)
+            settlement = [[cell.text.strip() for cell in row.cells] for row in document.tables[0].rows]
+            self.assertEqual(settlement[1][3], "1789例")
+            self.assertEqual(settlement[1][4], "178,900")
+            self.assertEqual(settlement[2][4], "30,000")
+            self.assertEqual(settlement[3][4], "208,900")
             service_para = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == f"服务单位：{payload['service']['unit']}")
             date_para = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == f"日期：{payload['service']['date']}")
             self.assertEqual(service_para.alignment, 2)
@@ -610,9 +717,9 @@ class PipelineTest(unittest.TestCase):
             self.assertNotIn("重点问题分析", key_issue_body)
             self.assertNotIn("1. 血压控制现状与特征", key_issue_body)
             self.assertNotIn("2. 不良反应发生率", key_issue_body)
-            self.assertEqual(len(key_issue_body), len(payload["summary"]["key_issue_items"]))
-            self.assertTrue(any("血压控制" in paragraph for paragraph in key_issue_body))
-            self.assertTrue(any("不良反应" in paragraph for paragraph in key_issue_body))
+            self.assertEqual(key_issue_body, [AI_KEY_ISSUE_PARAGRAPH_1, AI_KEY_ISSUE_PARAGRAPH_2])
+            self.assertNotIn("呈现出较明确的反馈集中趋势", "\n".join(key_issue_body))
+            self.assertNotIn("该环节已经成为影响", "\n".join(key_issue_body))
             overall_idx = texts.index("5.2调研结果分析")
             overall_end = texts.index("5.3建议")
             overall_paragraphs = texts[overall_idx + 1:overall_end]
@@ -636,8 +743,8 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(disclaimer_unit.alignment, 2)
             attachment_question = next(paragraph for paragraph in document.paragraphs if "您服用厄贝沙坦氢氯噻嗪片后，血压控制效果如何？" in paragraph.text.strip())
             attachment_option = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip().startswith("A. 选项A"))
-            self.assertEqual(attachment_question.runs[0].font.name, "汉仪中宋简")
-            self.assertEqual(attachment_option.runs[0].font.name, "汉仪中宋简")
+            self.assertEqual(attachment_question.runs[0].font.name, "宋体")
+            self.assertEqual(attachment_option.runs[0].font.name, "宋体")
 
             analysis_table_questions = []
             for table in document.tables:
@@ -655,6 +762,8 @@ class PipelineTest(unittest.TestCase):
 
             with ZipFile(output_docx) as zipped:
                 xml = zipped.read("word/document.xml").decode("utf-8", "ignore")
+                styles_xml = zipped.read("word/styles.xml").decode("utf-8", "ignore")
+                theme_xml = zipped.read("word/theme/theme1.xml").decode("utf-8", "ignore")
                 settings_xml = zipped.read("word/settings.xml").decode("utf-8", "ignore")
                 chart_names = [name for name in zipped.namelist() if re.match(r"word/charts/chart\\d+\\.xml$", name)]
                 media_files = [name for name in zipped.namelist() if name.startswith("word/media/") and name != "word/media/"]
@@ -667,6 +776,10 @@ class PipelineTest(unittest.TestCase):
             self.assertIn('w:val="true"', settings_xml)
             self.assertIn("调研时间：2025年10月01日——2025年10月31日", xml)
             self.assertNotIn("2025年11月1日-11月30日", xml)
+            self.assertIn("宋体", xml)
+            self.assertIn("宋体", styles_xml)
+            self.assertIn("宋体", theme_xml)
+            self.assertNotIn("汉仪中宋简", xml + styles_xml + theme_xml)
             self.assertEqual(sorted(chart_names), sorted(template_chart_names))
             self.assertGreaterEqual(len(media_files), len(template_media_files) + 4)
 
@@ -766,6 +879,37 @@ class PipelineTest(unittest.TestCase):
             counts = Counter(analysis_table_questions)
             self.assertLessEqual(counts[payload["result_analysis"]["sections"][0]["visual_groups"][0]["table_data"]["question"]], 1)
 
+    def test_render_from_template_recalculates_settlement_total(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size="984",
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+
+            output_docx = Path(temp_dir) / "settlement.docx"
+            TemplateRenderer(Path(payload["meta"]["template_doc"]), payload).render(output_docx)
+            validate_docx(output_docx, payload)
+
+            settlement = [[cell.text.strip() for cell in row.cells] for row in Document(output_docx).tables[0].rows]
+            self.assertEqual(settlement[1][3], "984例")
+            self.assertEqual(settlement[1][4], "98,400")
+            self.assertEqual(settlement[2][4], "30,000")
+            self.assertEqual(settlement[3][4], "128,400")
+
     def test_adherence_render_removes_extra_template_sections_and_passes_final_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             report_content = Path(temp_dir) / "content.md"
@@ -852,7 +996,7 @@ class PipelineTest(unittest.TestCase):
                 validate_docx(attachment_docx, payload)
 
             font_docx = Path(temp_dir) / "bad-font.docx"
-            copy_docx_with_document_xml_replace(output_docx, font_docx, "汉仪中宋简", "SimSun", count=1000)
+            copy_docx_with_document_xml_replace(output_docx, font_docx, "宋体", "SimSun", count=1000)
             with self.assertRaisesRegex(FinalValidationError, "Unexpected font"):
                 validate_docx(font_docx, payload)
 

@@ -20,7 +20,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
-SONGTI = "汉仪中宋简"
+SONGTI = "宋体"
 BLACK = RGBColor(0x00, 0x00, 0x00)
 HEADER_BLUE = "4684D3"
 LIGHT_BLUE = "D5E4F5"

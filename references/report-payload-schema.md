@@ -56,7 +56,7 @@
     ]
   },
   "summary": {
-    "key_issue_analysis": ["..."],
+    "key_issue_analysis": ["AI-authored 5.1 paragraph 1, 250-350 Chinese characters", "AI-authored 5.1 paragraph 2, 250-350 Chinese characters"],
     "key_issue_items": [
       {
         "question_ref": "q01",
@@ -70,6 +70,19 @@
     ],
     "overall_analysis": ["..."],
     "recommendations": ["..."]
+  },
+  "service": {
+    "unit": "北京玖麟空科技有限公司",
+    "date": "2025年11月18日",
+    "settlement": {
+      "sample_unit_price": 100,
+      "sample_count": 1789,
+      "sample_amount": 178900,
+      "report_unit_price": 30000,
+      "report_count": 1,
+      "report_amount": 30000,
+      "total_amount": 208900
+    }
   },
   "attachments": {
     "attachment1_name": "厄贝沙坦氢氯噻嗪片用药体验与疗效反馈患者调查问卷",
