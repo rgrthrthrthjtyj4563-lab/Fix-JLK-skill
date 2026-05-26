@@ -33,6 +33,7 @@ description: "Use when generating patient questionnaire analysis reports for pha
    - `前言` 正文
    - `项目背景` 正文
    - 各 `4.x` 小节的分析正文
+   - `5.1 问卷重点问题分析` 正文
    - `5.2 调研结果分析` 正文
    不能决定模板分类、`4.x` 标题、`4.x` 引言、`5.1` 重点题目或图表点位。`4.x` 小标题由程序语义映射给出归纳性兜底值（如"漏服应对行为分析"），AI 草稿可在此基础上优化覆盖，但校验拒绝口语化截取类型的标题（如"您忘记服药后通常分析"）。
    - 可选：在 front matter 中通过 `dimensions_json` 字段声明维度结构（JSON 格式），AI 可以据此为任意新品种定义维度名称、引言、小标题和图表配置，实现新品种的动态适配。
@@ -52,12 +53,14 @@ description: "Use when generating patient questionnaire analysis reports for pha
    - `问卷结果分析` 下每个小标题对应 `1` 道题，分析正文必须为 `1` 段，严格控制在 `250-300` 字之间。`cluster_dimensions.py` 会自动将多题 subtopic 拆分为每题一个 subtopic。
    - 单题分析必须采用 `主结论 -> 解释/风险 -> 收束` 的报告式逻辑，不得写成程序化套话拼接。
    - 单题分析正文不得出现 `A/B/C/D`、`选项A/选项B` 等字母选项列举，应直接使用选项语义或归纳表达。
+   - `5.1 问卷重点问题分析` 正文必须由 AI 提供，程序不得生成、兜底或覆盖；固定 `2` 段，每段对应程序选定的一个重点问题，每段 `250-350` 字，采用 `重点结论 -> 数据解释 -> 管理含义 -> 收束判断`，不得使用“呈现出较明确的反馈集中趋势”“该环节已经成为影响……”等程序化固定句式。
 4. 用 `scripts/build_payload.py` 构建 `report_payload.json`。如果 AI 草稿中的 `4.x` 章节集合、标题或小标题与 `cluster_dimensions` 骨架冲突，必须直接报错，不做兼容。
    - `问卷结果分析` 导语中的维度名称和维度数量必须与 `4.x` 实际章节完全一致。
    - `用药体验与疗效反馈` 模板的 `问卷结果分析` 固定包含 `2` 张概览图：`维度占比饼状图` 与 `维度横向柱形图`。
    - 两张概览图的统计口径统一为各 `4.x` 维度归入的题目数量，维度顺序必须与 `4.1-4.7` 顺序一致。
    - 第一张概览图必须保持原生 Office 饼图；第二张概览图必须改为 PNG 图片形式的“横向柱状图 + 维度题目数量”输出，不能退化为饼图、占比图或依赖 `chart2.xml + Workbook2.xlsx` 的重算结果。
    - `5.1 问卷重点问题分析` 必须保留 `2` 张原生 `3D` 饼图，并与第 `4` 部分的两张概览图并存，不能因为修第 `4` 部分图表而删除 `5.1` 双图。
+   - `问卷调研服务结算` 必须按样本量实际计算：样本费用 = 样本数 × 100，报告费用 = 30000，总计 = 样本费用 + 报告费用。
 5. `5.1 问卷重点问题分析` 默认从模版内置的维度优先级中选题（依从性模版为 `4.2→4.3`，疗效模版为 `4.1→4.2`）。可通过 `report_content.md` front matter 中的 `key_issue_sections` 字段覆盖选题优先级：
    - 格式：JSON 数组字符串，`key_issue_sections: '["4.4", "4.2"]'`，或逗号分隔 `key_issue_sections: '4.4,4.2'`
    - 校验：声明的编号必须存在于实际 `4.x` 章节中，否则 pipeline 直接报错
@@ -71,7 +74,7 @@ description: "Use when generating patient questionnaire analysis reports for pha
      - `附件1` 必须按题目块整体重建：题干使用 `（1）（2）...` 顺序号，去掉原题号前缀如 `1.` `6.` `11.`，选项仍保留 `A./B./C./D.` 且必须按原始问卷顺序逐题展开。
 7. 运行时优先使用 `scripts/run_report_pipeline.py`，它会为每次生成创建独立运行目录，避免复用固定的 `tmp/docs/content.md` 或 `generated.docx`。
 8. `scripts/run_report_pipeline.py` 必须在渲染后调用 `scripts/final_validate_docx.py` 做最终 Word 验收；验收失败时必须直接失败并移除最终交付 docx，只保留运行目录诊断文件。
-9. 检查输出必须保留目录、前言、页眉、标题层级、蓝底表格和模板图表风格。
+9. 检查输出必须保留目录、前言、页眉、标题层级、蓝底表格和模板图表风格，全文字体统一为 `宋体`。
 10. `scripts/build_payload.py` 会对 `前言`、`项目背景` 和 `问卷结果分析` 单题正文执行硬校验；段数、字数、区域信息、结构或旧式百分比分析不达标时，pipeline 必须直接失败，不得静默降级。
 11. 如果模板底稿缺少第 `4` 部分的第二张概览图位，或维度配置数量与实际 `4.x` 章节不一致，pipeline 必须直接失败。
 
@@ -81,10 +84,10 @@ description: "Use when generating patient questionnaire analysis reports for pha
 - 任意新品种：通过 `report_content.md` front matter 中的 `dimensions_json` 字段动态声明维度，无需硬编码
 
 ## Chapter 4 Format Rules (must match reference template)
-- `4.x` heading format: `4.1Title` (no space between number and title), font Hanyi Zhongsong 16pt Bold, `pageBreakBefore=true`, `keepNext=true`, line spacing `line=480`.
-- Subtitle format: plain text only (no `(1)` index prefix), font Hanyi Zhongsong 12pt Bold, `pageBreakBefore=true`, `keepNext=true`, line spacing `line=600`, `firstLineChars=0` (no first-line indent).
-- Analysis paragraph: Hanyi Zhongsong 12pt, justified alignment, first-line indent 2 chars (`firstLineChars=200`), line spacing `line=600`, `pageBreakBefore=true`, `keepNext=true`.
-- Table style: `tblW=5000 pct` (full page width), header/first-column bg `4684D3`, data-cell bg `D9EAF7`, row height `atLeast 567 dxa`, font Hanyi Zhongsong 10pt, line spacing `line=240` (single), border color `FFFFFF`.
+- `4.x` heading format: `4.1Title` (no space between number and title), font 宋体 16pt Bold, `pageBreakBefore=true`, `keepNext=true`, line spacing `line=480`.
+- Subtitle format: plain text only (no `(1)` index prefix), font 宋体 12pt Bold, `pageBreakBefore=true`, `keepNext=true`, line spacing `line=600`, `firstLineChars=0` (no first-line indent).
+- Analysis paragraph: 宋体 12pt, justified alignment, first-line indent 2 chars (`firstLineChars=200`), line spacing `line=600`, `pageBreakBefore=true`, `keepNext=true`.
+- Table style: `tblW=5000 pct` (full page width), header/first-column bg `4684D3`, data-cell bg `D9EAF7`, row height `atLeast 567 dxa`, font 宋体 10pt, line spacing `line=240` (single), border color `FFFFFF`.
 - Each question follows the fixed pattern: `Subtitle -> Statistics Table -> Analysis Paragraph`. One subtopic contains exactly one question; multi-question stacking under one subtitle is prohibited.
 
 ## Output Notes

@@ -17,13 +17,20 @@ except ImportError:
     from expression_data import MAX_ANALYSIS_CHARS, MIN_ANALYSIS_CHARS
 
 
-EXPECTED_FONT = "汉仪中宋简"
+EXPECTED_FONT = "宋体"
 FORBIDDEN_ANALYSIS_PATTERNS = [
     r"\b[ABCD]\.",
     r"选项[ABCD]",
     r"逐项分布",
     r"从共性特征看",
     r"建议",
+]
+MIN_KEY_ISSUE_CHARS = 250
+MAX_KEY_ISSUE_CHARS = 350
+FORBIDDEN_KEY_ISSUE_PATTERNS = [
+    r"呈现出较明确的反馈集中趋势",
+    r"该环节已经成为影响",
+    r"更适合作为后续患者教育和随访沟通的重点切入点",
 ]
 
 
@@ -286,6 +293,37 @@ def _validate_sample_size_text(texts: list[str], payload: dict) -> None:
         raise FinalValidationError(f"Rendered report is missing sample size text: {sample_size}份")
 
 
+def _format_money(value: object) -> str:
+    try:
+        return f"{int(value):,}"
+    except Exception:
+        return str(value or "")
+
+
+def _validate_settlement_table(doc: Document, payload: dict) -> None:
+    settlement = payload.get("service", {}).get("settlement", {})
+    if not settlement:
+        return
+    if not doc.tables:
+        raise FinalValidationError("Missing settlement table.")
+    table = doc.tables[0]
+    if len(table.rows) < 4:
+        raise FinalValidationError("Settlement table is incomplete.")
+    expected_sample_amount = int(settlement.get("sample_count", 0)) * int(settlement.get("sample_unit_price", 0))
+    expected_report_amount = int(settlement.get("report_count", 0)) * int(settlement.get("report_unit_price", 0))
+    expected_total = expected_sample_amount + expected_report_amount
+    expected = {
+        (1, 3): f"{settlement.get('sample_count', 0)}例",
+        (1, 4): _format_money(expected_sample_amount),
+        (2, 4): _format_money(expected_report_amount),
+        (3, 4): _format_money(expected_total),
+    }
+    for (row_idx, col_idx), value in expected.items():
+        actual = table.cell(row_idx, col_idx).text.strip()
+        if actual != value:
+            raise FinalValidationError(f"Settlement table mismatch at row={row_idx}, col={col_idx}: expected={value}, actual={actual}")
+
+
 def _validate_subtopic_numbering_xml(docx_path: Path) -> None:
     root, ns = _document_xml_root(docx_path)
     inside_ch4 = False
@@ -298,6 +336,21 @@ def _validate_subtopic_numbering_xml(docx_path: Path) -> None:
         if inside_ch4 and re.match(r"^（\d+）", text):
             if paragraph.find("./w:pPr/w:numPr", ns) is not None:
                 raise FinalValidationError(f"Result-analysis subtopic keeps Word numbering: {text}")
+
+
+def _validate_attachment_numbering_xml(docx_path: Path) -> None:
+    root, ns = _document_xml_root(docx_path)
+    inside_attachment = False
+    for paragraph in root.findall(".//w:p", ns):
+        text = _paragraph_text(paragraph, ns)
+        if text.startswith("附件1"):
+            inside_attachment = True
+            continue
+        if text.startswith("附件2"):
+            inside_attachment = False
+        if inside_attachment and text:
+            if paragraph.find("./w:pPr/w:numPr", ns) is not None:
+                raise FinalValidationError(f"Attachment 1 paragraph keeps Word numbering: {text}")
 
 
 def _validate_png_chart_layout(docx_path: Path, payload: dict) -> None:
@@ -366,12 +419,25 @@ def _validate_key_issue_text(texts: list[str], payload: dict) -> None:
             raise FinalValidationError("5.1 contains generic fallback title: 重点问题分析")
         if stripped in old_headings:
             raise FinalValidationError("5.1 contains numbered issue title paragraphs.")
+        for pattern in FORBIDDEN_KEY_ISSUE_PATTERNS:
+            if re.search(pattern, stripped):
+                raise FinalValidationError("5.1 contains fixed programmatic wording.")
+    expected = [str(item).strip() for item in payload.get("summary", {}).get("key_issue_analysis", []) if str(item).strip()]
+    if body != expected:
+        raise FinalValidationError("5.1 key issue text does not match AI payload paragraphs.")
+    if len(body) != len(payload.get("summary", {}).get("key_issue_items", [])):
+        raise FinalValidationError("5.1 paragraph count does not match key issue item count.")
+    for index, paragraph in enumerate(body, start=1):
+        if len(paragraph) < MIN_KEY_ISSUE_CHARS or len(paragraph) > MAX_KEY_ISSUE_CHARS:
+            raise FinalValidationError(f"5.1 paragraph {index} length is invalid.")
 
 
 def _validate_font_xml(docx_path: Path) -> None:
     ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
     with ZipFile(docx_path) as zipped:
         root = ET.fromstring(zipped.read("word/document.xml"))
+        styles = ET.fromstring(zipped.read("word/styles.xml"))
+        theme_text = zipped.read("word/theme/theme1.xml").decode("utf-8", "ignore")
 
     for run in root.findall(".//w:r", ns):
         texts = [node.text or "" for node in run.findall("w:t", ns)]
@@ -388,6 +454,18 @@ def _validate_font_xml(docx_path: Path) -> None:
         ]
         if any(value != EXPECTED_FONT for value in values):
             raise FinalValidationError(f"Unexpected font in visible text run: {values}")
+    for fonts in styles.findall(".//w:rFonts", ns):
+        values = [
+            fonts.get(f"{{{ns['w']}}}ascii"),
+            fonts.get(f"{{{ns['w']}}}hAnsi"),
+            fonts.get(f"{{{ns['w']}}}eastAsia"),
+            fonts.get(f"{{{ns['w']}}}cs"),
+        ]
+        if any(value and value != EXPECTED_FONT for value in values):
+            raise FinalValidationError(f"Unexpected font in style definition: {values}")
+    for old in ["汉仪中宋简", "Times New Roman", "黑体", "Arial"]:
+        if old in theme_text:
+            raise FinalValidationError(f"Unexpected theme font remains: {old}")
 
 
 def _validate_subtitle_formality(payload: dict) -> None:
@@ -419,6 +497,7 @@ def validate_docx(docx_path: Path, payload: dict) -> None:
     doc = Document(str(docx_path))
     texts = _visible_paragraph_texts(doc)
     _validate_sample_size_text(texts, payload)
+    _validate_settlement_table(doc, payload)
     _validate_result_sections(texts, payload)
     _validate_analysis_paragraphs(texts, payload)
     _validate_analysis_opening_diversity(payload)
@@ -428,6 +507,7 @@ def validate_docx(docx_path: Path, payload: dict) -> None:
     _validate_key_issue_text(texts, payload)
     _validate_attachment1(texts, payload)
     _validate_subtopic_numbering_xml(docx_path)
+    _validate_attachment_numbering_xml(docx_path)
     _validate_png_chart_layout(docx_path, payload)
     _validate_font_xml(docx_path)
 

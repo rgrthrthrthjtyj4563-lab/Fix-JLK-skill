@@ -46,6 +46,13 @@ def split_front_matter(text: str) -> tuple[dict, str]:
 
 DIMENSIONS_JSON_CHART_TYPES = {"pie", "bar", "bar3d"}
 DIMENSIONS_JSON_CHART_STYLES = {"efficacy_pie", "safety_pie", "behavior_bar"}
+MIN_KEY_ISSUE_CHARS = 250
+MAX_KEY_ISSUE_CHARS = 350
+FORBIDDEN_KEY_ISSUE_PATTERNS = [
+    r"呈现出较明确的反馈集中趋势",
+    r"该环节已经成为影响",
+    r"更适合作为后续患者教育和随访沟通的重点切入点",
+]
 
 
 def _require_text(value: object, field: str) -> str:
@@ -328,6 +335,37 @@ def _valid_sample_value(value: object) -> str:
         return str(number)
     except Exception:
         return text
+
+
+def _sample_int(value: object) -> int | None:
+    normalized = _valid_sample_value(value)
+    if not normalized:
+        return None
+    try:
+        number = float(normalized)
+    except Exception:
+        return None
+    if number <= 0:
+        return None
+    return int(number)
+
+
+def build_settlement(sample_size: object) -> dict:
+    sample_count = _sample_int(sample_size) or 0
+    sample_unit_price = 100
+    report_unit_price = 30000
+    report_count = 1
+    sample_amount = sample_count * sample_unit_price
+    report_amount = report_unit_price * report_count
+    return {
+        "sample_unit_price": sample_unit_price,
+        "sample_count": sample_count,
+        "sample_amount": sample_amount,
+        "report_unit_price": report_unit_price,
+        "report_count": report_count,
+        "report_amount": report_amount,
+        "total_amount": sample_amount + report_amount,
+    }
 
 
 def _option_count_total(question: dict) -> str:
@@ -701,6 +739,29 @@ def _parse_key_issue_sections(meta: dict, valid_numbers: set[str]) -> list[str] 
     return validated[:2]
 
 
+def choose_key_issue_analysis(ai_paragraphs: list[str], expected_count: int) -> list[str]:
+    paragraphs = sanitize_body_paragraphs(ai_paragraphs)
+    if expected_count <= 0:
+        return []
+    if len(paragraphs) != expected_count:
+        raise ValueError(
+            f"5.1问卷重点问题分析 must contain exactly {expected_count} AI paragraphs."
+        )
+    for index, paragraph in enumerate(paragraphs, start=1):
+        length = len(paragraph)
+        if length < MIN_KEY_ISSUE_CHARS or length > MAX_KEY_ISSUE_CHARS:
+            raise ValueError(
+                f"5.1问卷重点问题分析 paragraph {index} length must be "
+                f"{MIN_KEY_ISSUE_CHARS}-{MAX_KEY_ISSUE_CHARS} Chinese characters."
+            )
+        if not any(marker in paragraph for marker in ["说明", "表明", "反映", "提示", "判断"]):
+            raise ValueError(f"5.1问卷重点问题分析 paragraph {index} lacks analytical judgment.")
+        for pattern in FORBIDDEN_KEY_ISSUE_PATTERNS:
+            if re.search(pattern, paragraph):
+                raise ValueError(f"5.1问卷重点问题分析 paragraph {index} contains fixed programmatic wording.")
+    return paragraphs
+
+
 def validate_content_structure(content: dict, grouped: dict) -> None:
     expected_sections = grouped.get("sections", [])
     expected_by_number = {section["section_number"]: section for section in expected_sections}
@@ -934,12 +995,22 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "heading": item["heading"],
             "chart_title": item["chart_title"],
             "chart_type": "pie",
-            "paragraph": build_key_issue_paragraph(item["question"], region, product),
+            "paragraph": "",
             "categories": [opt.get("text", "") for opt in item["question"].get("options", [])],
             "values": [float(str(opt.get("pct", "0")).rstrip("%") or 0) for opt in item["question"].get("options", [])],
         }
         for item in key_issue_questions
     ]
+    programmatic_key_issue_analysis = [
+        build_key_issue_paragraph(qmap[item["question_ref"]], region, product)
+        for item in key_issue_items
+    ]
+    ai_key_issue_analysis = choose_key_issue_analysis(
+        content["summary"]["key_issue_analysis"],
+        len(key_issue_items),
+    )
+    for item, paragraph in zip(key_issue_items, ai_key_issue_analysis):
+        item["paragraph"] = paragraph
 
     programmatic_overall_analysis = build_programmatic_overall_analysis(
         result_sections,
@@ -993,6 +1064,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
         "service": {
             "unit": cli_args.disclaimer_unit or meta.get("disclaimer_unit") or "北京玖麟空科技有限公司",
             "date": derive_service_date(survey_period),
+            "settlement": build_settlement(sample_size),
         },
         "preface": choose_two_paragraphs(content["preface"], derive_preface(product, region, str(sample_size) if sample_size else "")),
         "project_background": choose_two_paragraphs(content["project_background"], derive_project_background(product, region)),
@@ -1010,16 +1082,8 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "sections": result_sections,
         },
         "summary": {
-            "key_issue_analysis": [
-                value
-                for item in key_issue_items
-                for value in [item["heading"], item["paragraph"]]
-            ],
-            "key_issue_analysis_programmatic": [
-                value
-                for item in key_issue_items
-                for value in [item["heading"], item["paragraph"]]
-            ],
+            "key_issue_analysis": ai_key_issue_analysis,
+            "key_issue_analysis_programmatic": programmatic_key_issue_analysis,
             "key_issue_items": key_issue_items,
             "overall_analysis": choose_overall_analysis(content["summary"]["overall_analysis"], programmatic_overall_analysis),
             "overall_analysis_programmatic": programmatic_overall_analysis,
@@ -1075,6 +1139,22 @@ def validate_payload(payload: dict) -> None:
     for section in payload["result_analysis"]["sections"]:
         if not section["subtopics"]:
             raise ValueError(f"Section {section['section_number']}{section['section_title']} must contain subtopics.")
+    key_issue_items = payload.get("summary", {}).get("key_issue_items", [])
+    key_issue_analysis = payload.get("summary", {}).get("key_issue_analysis", [])
+    choose_key_issue_analysis(key_issue_analysis, len(key_issue_items))
+    for item, paragraph in zip(key_issue_items, key_issue_analysis):
+        if item.get("paragraph") != paragraph:
+            raise ValueError("5.1 key issue item paragraph must match AI key issue analysis.")
+    settlement = payload.get("service", {}).get("settlement", {})
+    if settlement:
+        expected_sample_amount = int(settlement.get("sample_count", 0)) * int(settlement.get("sample_unit_price", 0))
+        expected_report_amount = int(settlement.get("report_count", 0)) * int(settlement.get("report_unit_price", 0))
+        if int(settlement.get("sample_amount", -1)) != expected_sample_amount:
+            raise ValueError("Settlement sample amount is incorrect.")
+        if int(settlement.get("report_amount", -1)) != expected_report_amount:
+            raise ValueError("Settlement report amount is incorrect.")
+        if int(settlement.get("total_amount", -1)) != expected_sample_amount + expected_report_amount:
+            raise ValueError("Settlement total amount is incorrect.")
 
 
 def main() -> None:
