@@ -44,6 +44,108 @@ def split_front_matter(text: str) -> tuple[dict, str]:
     return meta, body
 
 
+DIMENSIONS_JSON_CHART_TYPES = {"pie", "bar", "bar3d"}
+DIMENSIONS_JSON_CHART_STYLES = {"efficacy_pie", "safety_pie", "behavior_bar"}
+
+
+def _require_text(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} is required")
+    return value.strip()
+
+
+def _validate_pattern_list(value: object, field: str) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{field} patterns must be a non-empty list")
+    patterns = []
+    for idx, pattern in enumerate(value):
+        pattern_field = f"{field}[{idx}]"
+        text = _require_text(pattern, pattern_field)
+        try:
+            re.compile(text)
+        except re.error as exc:
+            raise ValueError(f"{pattern_field} invalid regex: {exc}") from exc
+        patterns.append(text)
+    return patterns
+
+
+def _validate_dimensions_json(parsed: object) -> dict:
+    if not isinstance(parsed, dict):
+        raise ValueError("dimensions_json must be a JSON object")
+    dimensions = parsed.get("dimensions")
+    if not isinstance(dimensions, list) or not dimensions:
+        raise ValueError("dimensions_json.dimensions must be a non-empty list")
+
+    normalized_dimensions = []
+    for dim_idx, dimension in enumerate(dimensions):
+        dim_field = f"dimensions_json.dimensions[{dim_idx}]"
+        if not isinstance(dimension, dict):
+            raise ValueError(f"{dim_field} must be an object")
+        name = _require_text(dimension.get("name"), f"{dim_field}.name")
+        intro = _require_text(dimension.get("intro"), f"{dim_field}.intro")
+        subtopics = dimension.get("subtopics")
+        if not isinstance(subtopics, list) or not subtopics:
+            raise ValueError(f"{dim_field}.subtopics must be a non-empty list")
+
+        normalized_subtopics = []
+        for sub_idx, subtopic in enumerate(subtopics):
+            sub_field = f"{dim_field}.subtopics[{sub_idx}]"
+            if not isinstance(subtopic, dict):
+                raise ValueError(f"{sub_field} must be an object")
+            patterns = _validate_pattern_list(subtopic.get("patterns"), sub_field)
+            subtitle = _require_text(subtopic.get("subtitle"), f"{sub_field}.subtitle")
+            normalized_subtopics.append({"patterns": patterns, "subtitle": subtitle})
+
+        charts = dimension.get("charts", [])
+        if charts is None:
+            charts = []
+        if not isinstance(charts, list):
+            raise ValueError(f"{dim_field}.charts must be a list")
+        normalized_charts = []
+        for chart_idx, chart in enumerate(charts):
+            chart_field = f"{dim_field}.charts[{chart_idx}]"
+            if not isinstance(chart, dict):
+                raise ValueError(f"{chart_field} must be an object")
+            patterns = _validate_pattern_list(chart.get("patterns"), chart_field)
+            chart_type = _require_text(chart.get("chart_type"), f"{chart_field}.chart_type")
+            if chart_type not in DIMENSIONS_JSON_CHART_TYPES:
+                allowed = ", ".join(sorted(DIMENSIONS_JSON_CHART_TYPES))
+                raise ValueError(f"{chart_field}.chart_type must be one of: {allowed}")
+            chart_style_profile = _require_text(
+                chart.get("chart_style_profile"),
+                f"{chart_field}.chart_style_profile",
+            )
+            if chart_style_profile not in DIMENSIONS_JSON_CHART_STYLES:
+                allowed = ", ".join(sorted(DIMENSIONS_JSON_CHART_STYLES))
+                raise ValueError(f"{chart_field}.chart_style_profile must be one of: {allowed}")
+            normalized_charts.append({
+                "patterns": patterns,
+                "chart_type": chart_type,
+                "chart_style_profile": chart_style_profile,
+            })
+
+        normalized_dimensions.append({
+            "name": name,
+            "intro": intro,
+            "subtopics": normalized_subtopics,
+            "charts": normalized_charts,
+        })
+
+    return {"dimensions": normalized_dimensions}
+
+
+def parse_dimensions_from_meta(meta: dict) -> dict | None:
+    """Parse and validate dynamic dimension config from front matter."""
+    raw = meta.get("dimensions_json")
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError(f"dimensions_json must be valid JSON: {exc}") from exc
+    return _validate_dimensions_json(parsed)
+
+
 def parse_paragraphs(lines: list[str]) -> list[str]:
     paragraphs = []
     buf: list[str] = []
@@ -554,6 +656,51 @@ def select_key_issue_questions(result_sections: list[dict], qmap: dict, preferre
     return selected[:2]
 
 
+def _parse_key_issue_sections(meta: dict, valid_numbers: set[str]) -> list[str] | None:
+    """从 front matter 解析 key_issue_sections 字段。
+
+    支持两种格式：
+      - JSON 字符串：'["4.4", "4.2"]'
+      - 逗号分隔字符串：'4.4,4.2'
+
+    校验每个编号是否存在于 valid_numbers 中，不合法则报错。
+    最多返回前 2 个有效值，与 select_key_issue_questions 对齐。
+    未声明时返回 None，调用方回退到默认顺序。
+    """
+    raw = meta.get("key_issue_sections") if meta else None
+    if not raw:
+        return None
+
+    if isinstance(raw, list):
+        candidates = [str(item).strip() for item in raw]
+    elif isinstance(raw, str):
+        stripped = raw.strip()
+        if stripped.startswith("["):
+            try:
+                candidates = json.loads(stripped)
+            except (json.JSONDecodeError, TypeError):
+                raise ValueError(f"Invalid JSON in key_issue_sections: {raw}")
+        else:
+            candidates = [item.strip() for item in stripped.split(",") if item.strip()]
+    else:
+        raise ValueError(f"Unsupported key_issue_sections type: {type(raw).__name__}")
+
+    if not candidates:
+        return None
+
+    validated = []
+    for candidate in candidates:
+        candidate = str(candidate).strip()
+        if candidate not in valid_numbers:
+            raise ValueError(
+                f"key_issue_sections contains unknown section number '{candidate}'. "
+                f"Valid section numbers: {sorted(valid_numbers)}"
+            )
+        validated.append(candidate)
+
+    return validated[:2]
+
+
 def validate_content_structure(content: dict, grouped: dict) -> None:
     expected_sections = grouped.get("sections", [])
     expected_by_number = {section["section_number"]: section for section in expected_sections}
@@ -572,13 +719,6 @@ def validate_content_structure(content: dict, grouped: dict) -> None:
 
     for section in drafted_sections:
         expected = expected_by_number[section["section_number"]]
-        drafted_title = normalize_space(section.get("section_title", ""))
-        if drafted_title and drafted_title != expected["section_title"]:
-            raise ValueError(
-                f"AI draft section title mismatch for {section['section_number']}: "
-                f"expected {expected['section_title']}, got {drafted_title}."
-            )
-
         drafted_subtopics = section.get("subtopics", [])
         expected_subtopics = expected.get("subtopics", [])
         if len(drafted_subtopics) > len(expected_subtopics):
@@ -587,9 +727,6 @@ def validate_content_structure(content: dict, grouped: dict) -> None:
             )
         for index, drafted_subtopic in enumerate(drafted_subtopics):
             drafted_subtopic_title = normalize_space(drafted_subtopic.get("title", ""))
-            # D2: AI-generated subtitles are the authority. Extract clean subtitle
-            # from markdown heading "（N） xxx分析" → "xxx分析" and allow AI to differ
-            # from cluster hardcoded subtitles. Only validate count, not text.
             if drafted_subtopic_title and index >= len(expected_subtopics):
                 raise ValueError(
                     f"AI draft has more subtopics than detected template slots for {section['section_number']}."
@@ -643,26 +780,47 @@ def build_programmatic_overall_analysis(
                 return _question_option_snapshot(qmap[refs[0]])
         return "当前维度的问卷反馈能够形成相对稳定的结论，但仍需结合后续随访持续观察。"
 
-    paragraphs = [
-        (
-            f"本次调研基于{region or '目标地区'}患者样本开展，结合{sample_size or '当前收集到的有效问卷'}份有效问卷结果，"
-            f"对{product}在真实使用过程中的疗效感知、安全性体验、用药行为、便利性、经济性、可及性以及信息支持情况进行了复盘。"
-            "整体来看，患者反馈以正向、稳定为主，说明产品在长期慢病管理场景中已经形成较成熟的使用基础，但行为执行和信息确认环节仍存在继续优化空间。"
-        ),
-        (
-            f"在疗效与安全性层面，{first_snapshot('4.1')}，说明患者对血压控制结果的感知总体较积极。"
-            f"同时，{first_snapshot('4.2')}，意味着患者并未将常见不适反应视为主要阻碍，产品在真实使用场景中的耐受性基础较好。"
-        ),
-        (
-            f"在用药行为与便利性层面，{first_snapshot('4.3')}，说明多数患者已经具备一定的规范意识，但在联合用药确认、监测频率和主动咨询等环节上仍可能存在执行松动。"
-            f"在便利性方面，{first_snapshot('4.4')}，反映出服药频率与包装设计整体上没有构成普遍阻力。"
-        ),
-        (
-            f"在经济性、可及性与信息支持层面，{first_snapshot('4.5')}，说明价格感知并未普遍构成持续治疗障碍；{first_snapshot('4.6')}，表明供应稳定性总体可控；{first_snapshot('4.7')}，则显示现有说明书与指导支持基本能够覆盖患者的基础理解需求。"
-            f"综合判断，{product}在{region or '当前调研区域'}已经具备较完整的正向使用基础，后续重点应放在加强行为执行、提升细分解释能力，以及补充联合用药和监测管理支持等服务动作上。"
-        ),
-    ]
-    return [normalize_space(paragraph) for paragraph in paragraphs]
+    dimension_names = [sec.get("section_title", "") for sec in result_sections]
+    section_numbers = list(section_lookup.keys())
+
+    dim_count = len(result_sections)
+    dimensions_text = "、".join(name for name in dimension_names if name)
+
+    opening = (
+        f"本次调研基于{region or '目标地区'}患者样本开展，结合{sample_size or '当前收集到的有效问卷'}份有效问卷结果，"
+        f"对{product}在真实使用过程中的反馈进行了多维度复盘。"
+        "整体来看，患者反馈以正向、稳定为主，说明产品在长期使用场景中已经形成较成熟的使用基础，但部分环节仍存在继续优化空间。"
+    )
+
+    snapshot_paragraphs = []
+    for sec in result_sections:
+        sn = sec["section_number"]
+        snap = first_snapshot(sn)
+        st = sec.get("section_title", "")
+        if snap and snap != "当前维度的问卷反馈能够形成相对稳定的结论，但仍需结合后续随访持续观察。":
+            snapshot_paragraphs.append(f"在{st}维度，{snap}。")
+
+    if len(snapshot_paragraphs) >= 3:
+        mid_para = "".join(snapshot_paragraphs[:3])
+        detail_paras = "".join(snapshot_paragraphs[3:])
+        closing = (
+            f"综合判断，{product}在{region or '当前调研区域'}已经具备较完整的正向使用基础，"
+            f"后续重点应放在加强行为执行、提升细分解释能力，以及补充关键支持服务等动作上。"
+        )
+        return [normalize_space(opening), normalize_space(mid_para), normalize_space(detail_paras + closing)]
+    elif snapshot_paragraphs:
+        body = "".join(snapshot_paragraphs)
+        closing = (
+            f"综合判断，{product}在{region or '当前调研区域'}已经具备较完整的正向使用基础，"
+            f"后续重点应放在加强行为执行、提升细分解释能力，以及补充关键支持服务等动作上。"
+        )
+        return [normalize_space(opening), normalize_space(body), normalize_space(closing)]
+    else:
+        closing = (
+            f"综合各项反馈，{product}在{region or '当前调研区域'}已经具备较完整的正向使用基础，"
+            f"后续重点应放在加强行为执行、提升细分解释能力，以及补充关键支持服务等动作上。"
+        )
+        return [normalize_space(opening), normalize_space(closing)]
 
 
 def choose_overall_analysis(ai_paragraphs: list[str], fallback: list[str]) -> list[str]:
@@ -674,7 +832,8 @@ def choose_overall_analysis(ai_paragraphs: list[str], fallback: list[str]) -> li
 
 
 def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argparse.Namespace) -> dict:
-    grouped = cluster_dimensions(questionnaire)
+    ai_dimensions = parse_dimensions_from_meta(meta) if meta else None
+    grouped = cluster_dimensions(questionnaire, ai_dimensions=ai_dimensions)
     validate_content_structure(content, grouped)
     attachment_questions = build_attachment_questions(questionnaire)
     qmap = {item["question_ref"]: item for item in attachment_questions}
@@ -761,10 +920,13 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "subtopics": subtopics,
         })
 
+    existing_numbers = {sec["section_number"] for sec in result_sections}
+    ai_key_issue = _parse_key_issue_sections(meta, existing_numbers)
+    preferred = ai_key_issue if ai_key_issue is not None else grouped.get("key_issue_preferred_sections", [])
     key_issue_questions = select_key_issue_questions(
         result_sections,
         qmap,
-        grouped.get("key_issue_preferred_sections", []),
+        preferred,
     )
     key_issue_items = [
         {

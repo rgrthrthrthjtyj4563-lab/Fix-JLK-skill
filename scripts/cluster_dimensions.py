@@ -6,6 +6,10 @@ Design principle: this module does NOT generate display text.
 It only groups questions by regex patterns and assigns chart config.
 Dimension names, subtitles, intros, and analysis text are AI-generated
 and supplied via build_payload.py from the report_content/markdown draft.
+
+When ai_dimensions is provided (from report_content.md front matter),
+it takes precedence over the hardcoded grouping templates. The hardcoded
+templates serve as fallback for backward compatibility.
 """
 
 from __future__ import annotations
@@ -16,12 +20,18 @@ import re
 from copy import deepcopy
 from pathlib import Path
 
+try:
+    from .expression_data import _topic_label, _infer_question_type
+except ImportError:
+    from expression_data import _topic_label, _infer_question_type
+
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_DIR = ROOT / "templates"
 
 
 # ─── Grouping Templates (patterns only, NO display text) ────────────────────
+# These serve as FALLBACK when ai_dimensions is not provided.
 
 EFFICACY_GROUPING = {
     "template_type": "用药体验与疗效反馈",
@@ -350,10 +360,164 @@ def _validate_grouping_config(config: dict, sections_out: list[dict]) -> None:
         )
 
 
+def _build_from_ai_dimensions(ai_dimensions: dict, questionnaire: dict) -> list[dict]:
+    """Build sections from ai_dimensions front matter.
+
+    ai_dimensions format:
+    {
+        "dimensions": [
+            {
+                "name": "药物认知与信息获取",
+                "intro": "本维度用于观察患者对药物作用的了解程度及信息来源结构。",
+                "subtopics": [
+                    {"patterns": ["作用", "了解", "认知"], "subtitle": "药物认知情况分析"},
+                    {"patterns": ["获取", "来源", "说明书"], "subtitle": "信息获取来源分析"},
+                ],
+                "charts": [
+                    {"patterns": ["作用", "认知"], "chart_type": "pie", "chart_style_profile": "efficacy_pie"}
+                ]
+            },
+            ...
+        ]
+    }
+    """
+    dimensions = ai_dimensions.get("dimensions", [])
+    all_questions = questionnaire.get("questions", [])
+    global_matched_refs = set()
+    sections_out = []
+    chart_index = 1
+
+    for dim_idx, dimension in enumerate(dimensions):
+        section_number = f"4.{dim_idx + 1}"
+        section_question_refs = []
+        active_subtopics = []
+        visual_groups = []
+        st_idx = 0
+
+        chart_specs = dimension.get("charts", [])
+
+        for st_def in dimension.get("subtopics", []):
+            patterns = st_def.get("patterns", [])
+            subtitle = st_def.get("subtitle", "")
+
+            matched_refs = []
+            for question in all_questions:
+                ref = question_ref(int(question["number"]))
+                if ref in global_matched_refs:
+                    continue
+                text = str(question.get("question", ""))
+                match = any(re.search(pattern, text) for pattern in patterns)
+                if match:
+                    matched_refs.append(ref)
+                    global_matched_refs.add(ref)
+
+            if not matched_refs:
+                continue
+
+            section_question_refs.extend(matched_refs)
+
+            for qi, ref in enumerate(matched_refs):
+                question_obj = next(
+                    (q for q in all_questions if question_ref(int(q["number"])) == ref),
+                    None,
+                )
+                chart_type = None
+                chart_style_profile = None
+                include_chart = False
+                for cs in chart_specs:
+                    if any(re.search(p, str(question_obj.get("question", ""))) for p in cs.get("patterns", [])):
+                        chart_type = cs.get("chart_type")
+                        chart_style_profile = cs.get("chart_style_profile")
+                        include_chart = True
+                        break
+
+                if len(matched_refs) == 1:
+                    derived_subtitle = subtitle
+                else:
+                    if question_obj and question_obj.get("question"):
+                        question_text = str(question_obj["question"])
+                        question_type = _infer_question_type(question_text)
+                        mapped_label = _topic_label(question_text, question_type)
+                        derived_subtitle = f"{mapped_label}分析"
+                    else:
+                        derived_subtitle = f"{subtitle}（{qi + 1}）"
+
+                chart_ref = None
+                if include_chart and qi == 0:
+                    chart_ref = f"chart_{chart_index:02d}"
+                    chart_index += 1
+
+                visual_groups.append({
+                    "question_ref": ref,
+                    "chart_ref": chart_ref,
+                    "chart_type": chart_type if qi == 0 else None,
+                    "chart_style_profile": chart_style_profile if qi == 0 else None,
+                })
+                active_subtopics.append({
+                    "subtopic_index": st_idx,
+                    "subtitle": derived_subtitle,
+                    "question_refs": [ref],
+                    "chart_type": chart_type if qi == 0 else None,
+                    "chart_style_profile": chart_style_profile if qi == 0 else None,
+                })
+                st_idx += 1
+
+        sections_out.append({
+            "section_number": section_number,
+            "section_title": dimension.get("name", ""),
+            "section_intro": dimension.get("intro", ""),
+            "question_refs": section_question_refs,
+            "subtopics": active_subtopics,
+            "visual_groups": visual_groups,
+        })
+
+    # Orphan questions go to the last dimension
+    if sections_out:
+        orphan_refs = []
+        for question in all_questions:
+            ref = question_ref(int(question["number"]))
+            if ref not in global_matched_refs:
+                orphan_refs.append(ref)
+                global_matched_refs.add(ref)
+
+        last_section = sections_out[-1]
+        for ref in orphan_refs:
+            last_section["question_refs"].append(ref)
+            question_obj = next(
+                (q for q in all_questions if question_ref(int(q["number"])) == ref),
+                None,
+            )
+            if question_obj and question_obj.get("question"):
+                question_text = str(question_obj["question"])
+                question_type = _infer_question_type(question_text)
+                mapped_label = _topic_label(question_text, question_type)
+                derived_subtitle = f"{mapped_label}分析"
+            else:
+                derived_subtitle = "其他问题分析"
+            last_section["subtopics"].append({
+                "subtopic_index": len(last_section["subtopics"]),
+                "subtitle": derived_subtitle,
+                "question_refs": [ref],
+                "chart_type": None,
+                "chart_style_profile": None,
+            })
+            last_section["visual_groups"].append({
+                "question_ref": ref,
+                "chart_ref": None,
+                "chart_type": None,
+                "chart_style_profile": None,
+            })
+
+    return sections_out
+
+
 # ─── Core: cluster questions into dimension/subtopic slots ──────────────────
 
-def cluster_dimensions(questionnaire: dict) -> dict:
+def cluster_dimensions(questionnaire: dict, ai_dimensions: dict | None = None) -> dict:
     """Group questions into dimension sections and subtopic slots.
+
+    When ai_dimensions is provided (from report_content.md front matter),
+    it takes precedence over the hardcoded grouping templates.
 
     Returns a dict with:
       - template_type, template_doc, header_title_suffix, report_title_suffix
@@ -369,133 +533,124 @@ def cluster_dimensions(questionnaire: dict) -> dict:
     template_type = detect_template_type(questionnaire)
     config = _grouping_config(template_type)
 
-    # Phase 1: match questions to subtopic slots
-    for question in questionnaire.get("questions", []):
-        ref = question_ref(int(question["number"]))
-        text = str(question.get("question", ""))
-        matched = False
-        for section in config["sections"]:
-            for subtopic in section["subtopics"]:
-                if any(re.search(pattern, text) for pattern in subtopic["patterns"]):
-                    subtopic.setdefault("question_refs", []).append(ref)
-                    matched = True
+    if ai_dimensions:
+        sections_out = _build_from_ai_dimensions(ai_dimensions, questionnaire)
+        dimension_names = [sec["section_title"] for sec in sections_out]
+        dimension_count = len(sections_out)
+        key_issue_preferred = [f"4.{i+1}" for i in range(min(2, dimension_count))]
+    else:
+        # Phase 1: match questions to subtopic slots (legacy path)
+        for question in questionnaire.get("questions", []):
+            ref = question_ref(int(question["number"]))
+            text = str(question.get("question", ""))
+            matched = False
+            for section in config["sections"]:
+                for subtopic in section["subtopics"]:
+                    if any(re.search(pattern, text) for pattern in subtopic["patterns"]):
+                        subtopic.setdefault("question_refs", []).append(ref)
+                        matched = True
+                        break
+                if matched:
                     break
-            if matched:
-                break
-        if not matched:
-            # Unmatched → last subtopic of last section
-            config["sections"][-1]["subtopics"][-1].setdefault("question_refs", []).append(ref)
+            if not matched:
+                config["sections"][-1]["subtopics"][-1].setdefault("question_refs", []).append(ref)
 
-    # Phase 2: build output sections — split multi-question subtopics into
-    # per-question subtopics so each question gets its own analysis unit
-    # (subtitle → table → analysis paragraph), matching the template pattern.
-    chart_index = 1
-    sections_out = []
-    for section in config["sections"]:
-        section_question_refs = []
-        active_subtopics = []
-        visual_groups = []
-        st_idx = 0
-        for subtopic in section["subtopics"]:
-            refs = subtopic.get("question_refs", [])
-            if not refs:
-                continue
-            section_question_refs.extend(refs)
-            # If subtopic has exactly 1 question, keep as-is
-            if len(refs) == 1:
-                chart_ref = None
-                if subtopic.get("include_chart"):
-                    chart_ref = f"chart_{chart_index:02d}"
-                    chart_index += 1
-                visual_groups.append({
-                    "question_ref": refs[0],
-                    "chart_ref": chart_ref,
-                    "chart_type": subtopic["chart_type"],
-                    "chart_style_profile": subtopic["chart_style_profile"],
-                })
-                active_subtopics.append({
-                    "subtopic_index": st_idx,
-                    "subtitle": subtopic["subtitle"],
-                    "question_refs": refs,
-                    "chart_type": subtopic.get("chart_type"),
-                    "chart_style_profile": subtopic.get("chart_style_profile"),
-                })
-                st_idx += 1
-            else:
-                # Split multi-question subtopic: one subtopic per question
-                # Only the first question inherits chart config
-                for qi, ref in enumerate(refs):
+        # Phase 2: build output sections
+        chart_index = 1
+        sections_out = []
+        for section in config["sections"]:
+            section_question_refs = []
+            active_subtopics = []
+            visual_groups = []
+            st_idx = 0
+            for subtopic in section["subtopics"]:
+                refs = subtopic.get("question_refs", [])
+                if not refs:
+                    continue
+                section_question_refs.extend(refs)
+                if len(refs) == 1:
                     chart_ref = None
-                    if qi == 0 and subtopic.get("include_chart"):
+                    if subtopic.get("include_chart"):
                         chart_ref = f"chart_{chart_index:02d}"
                         chart_index += 1
                     visual_groups.append({
-                        "question_ref": ref,
+                        "question_ref": refs[0],
                         "chart_ref": chart_ref,
-                        "chart_type": subtopic["chart_type"] if qi == 0 else None,
-                        "chart_style_profile": subtopic["chart_style_profile"] if qi == 0 else None,
+                        "chart_type": subtopic["chart_type"],
+                        "chart_style_profile": subtopic["chart_style_profile"],
                     })
-                    # Derive subtitle from question content; fallback to
-                    # "{original_subtitle}（{qi+1}）" for backwards compat
-                    question_obj = next(
-                        (q for q in questionnaire.get("questions", [])
-                         if question_ref(int(q["number"])) == ref),
-                        None,
-                    )
-                    if question_obj and question_obj.get("question"):
-                        # Derive a concise subtitle from the question text.
-                        # Strategy: strip question number → find the topic
-                        # phrase (before the first "？" or "？" or "（")
-                        # → append "分析".
-                        raw = str(question_obj["question"])
-                        # Remove leading question number like "1." / "9." / "1）"
-                        cleaned = re.sub(r"^\d+[\.\)、]\s*", "", raw).strip()
-                        # Cut at question mark or parenthesis
-                        cut = len(cleaned)
-                        for sep in ["？", "?", "（", "（", "（", "("]:
-                            pos = cleaned.find(sep)
-                            if 0 < pos < cut:
-                                cut = pos
-                        # If still >8 chars, try comma/colon as secondary cut
-                        if cut > 8:
-                            for sep in ["：", "：", "，", ",", "、", "；", ";"]:
-                                pos = cleaned.find(sep)
-                                if 0 < pos < cut and pos <= 8:
-                                    cut = pos
-                        topic = cleaned[:min(cut, 8)]
-                        derived_subtitle = f"{topic}分析"
-                    else:
-                        derived_subtitle = f"{subtopic['subtitle']}（{qi + 1}）"
                     active_subtopics.append({
                         "subtopic_index": st_idx,
-                        "subtitle": derived_subtitle,
-                        "question_refs": [ref],
-                        "chart_type": subtopic.get("chart_type") if qi == 0 else None,
-                        "chart_style_profile": subtopic.get("chart_style_profile") if qi == 0 else None,
+                        "subtitle": subtopic["subtitle"],
+                        "question_refs": refs,
+                        "chart_type": subtopic.get("chart_type"),
+                        "chart_style_profile": subtopic.get("chart_style_profile"),
                     })
                     st_idx += 1
-        sections_out.append({
-            "section_number": section["section_number"],
-            "section_title": section["section_title"],
-            "section_intro": section["section_intro"],
-            "question_refs": section_question_refs,
-            "subtopics": active_subtopics,
-            "visual_groups": visual_groups,
-        })
+                else:
+                    for qi, ref in enumerate(refs):
+                        chart_ref = None
+                        if qi == 0 and subtopic.get("include_chart"):
+                            chart_ref = f"chart_{chart_index:02d}"
+                            chart_index += 1
+                        visual_groups.append({
+                            "question_ref": ref,
+                            "chart_ref": chart_ref,
+                            "chart_type": subtopic["chart_type"] if qi == 0 else None,
+                            "chart_style_profile": subtopic["chart_style_profile"] if qi == 0 else None,
+                        })
+                        question_obj = next(
+                            (q for q in questionnaire.get("questions", [])
+                             if question_ref(int(q["number"])) == ref),
+                            None,
+                        )
+                        if question_obj and question_obj.get("question"):
+                            question_text = str(question_obj["question"])
+                            question_type = _infer_question_type(question_text)
+                            mapped_label = _topic_label(question_text, question_type)
+                            derived_subtitle = f"{mapped_label}分析"
+                        else:
+                            derived_subtitle = f"{subtopic['subtitle']}（{qi + 1}）"
+                        active_subtopics.append({
+                            "subtopic_index": st_idx,
+                            "subtitle": derived_subtitle,
+                            "question_refs": [ref],
+                            "chart_type": subtopic.get("chart_type") if qi == 0 else None,
+                            "chart_style_profile": subtopic.get("chart_style_profile") if qi == 0 else None,
+                        })
+                        st_idx += 1
+            sections_out.append({
+                "section_number": section["section_number"],
+                "section_title": section["section_title"],
+                "section_intro": section["section_intro"],
+                "question_refs": section_question_refs,
+                "subtopics": active_subtopics,
+                "visual_groups": visual_groups,
+            })
 
-    # Phase 3: validate
-    _validate_no_duplicate_refs(sections_out)
-    _validate_grouping_config(config, sections_out)
+        _validate_no_duplicate_refs(sections_out)
+        _validate_grouping_config(config, sections_out)
+        dimension_names = config["project_dimensions"]
+        dimension_count = config["dimension_count"]
+        key_issue_preferred = config["key_issue_preferred_sections"]
+
+    if ai_dimensions:
+        _validate_no_duplicate_refs(sections_out)
+
+    result_intro_template = (
+        "本次调查采用问卷调查方式，共有{question_count}个问题，"
+        "本报告从{dimensions_list}等{dimension_count}个维度展开统计分析。"
+    )
 
     return {
         "template_type": config["template_type"],
         "template_doc": config["template_doc"],
         "header_title_suffix": config["header_title_suffix"],
         "report_title_suffix": config["report_title_suffix"],
-        "dimension_count": config["dimension_count"],
-        "project_dimensions": config["project_dimensions"],
-        "key_issue_preferred_sections": config["key_issue_preferred_sections"],
-        "result_intro_template": config["result_intro_template"],
+        "dimension_count": dimension_count,
+        "project_dimensions": dimension_names,
+        "key_issue_preferred_sections": key_issue_preferred,
+        "result_intro_template": result_intro_template,
         "sections": sections_out,
     }
 
@@ -506,9 +661,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Group questionnaire questions into dimension slots.")
     parser.add_argument("questionnaire_json")
     parser.add_argument("-o", "--output", required=True)
+    parser.add_argument("--ai-dimensions", default=None, help="Path to ai_dimensions JSON file (optional)")
     args = parser.parse_args()
     questionnaire = json.loads(Path(args.questionnaire_json).read_text(encoding="utf-8"))
-    result = cluster_dimensions(questionnaire)
+    ai_dimensions = None
+    if args.ai_dimensions:
+        ai_dimensions = json.loads(Path(args.ai_dimensions).read_text(encoding="utf-8"))
+    result = cluster_dimensions(questionnaire, ai_dimensions=ai_dimensions)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

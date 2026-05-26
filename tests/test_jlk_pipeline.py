@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import json
 import tempfile
 import unittest
 import copy
@@ -276,6 +277,44 @@ disclaimer_unit: 北京玖麟空科技有限公司
 """
 
 
+def dynamic_ai_dimensions() -> dict:
+    return {
+        "dimensions": [
+            {
+                "name": "药物认知与信息获取",
+                "intro": "本维度用于观察患者对药物作用的了解程度及信息来源结构。",
+                "subtopics": [
+                    {"patterns": ["作用", "了解", "认知"], "subtitle": "药物认知情况分析"},
+                    {"patterns": ["获取", "来源", "说明书"], "subtitle": "信息获取来源分析"},
+                ],
+                "charts": [
+                    {"patterns": ["作用"], "chart_type": "pie", "chart_style_profile": "efficacy_pie"},
+                ],
+            },
+            {
+                "name": "用药行为与依从性",
+                "intro": "本维度用于观察患者用药执行和坚持情况。",
+                "subtopics": [
+                    {"patterns": ["剂量", "服药", "忘记|漏服"], "subtitle": "剂量执行与漏服应对分析"},
+                    {"patterns": ["监测", "记录"], "subtitle": "自我管理行为分析"},
+                    {"patterns": ["提醒", "依从|坚持规律"], "subtitle": "依从与提醒支持分析"},
+                ],
+                "charts": [
+                    {"patterns": ["剂量"], "chart_type": "bar3d", "chart_style_profile": "behavior_bar"},
+                ],
+            },
+            {
+                "name": "健康教育与支持需求",
+                "intro": "本维度用于观察患者对健康教育的接受意愿。",
+                "subtopics": [
+                    {"patterns": ["讲座", "培训", "参加", "兴趣", "希望|获得"], "subtitle": "健康教育参与意愿分析"},
+                ],
+                "charts": [],
+            },
+        ]
+    }
+
+
 def copy_docx_with_document_xml_replace(source: Path, target: Path, old: str, new: str, count: int = 1) -> None:
     with ZipFile(source) as src, ZipFile(target, "w") as dst:
         for item in src.infolist():
@@ -397,7 +436,7 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(payload["summary"]["key_issue_items"][1]["chart_title"], "不良反应发生率")
         self.assertEqual(payload["summary"]["key_issue_items"][0]["chart_type"], "pie")
         self.assertEqual(payload["summary"]["key_issue_items"][1]["chart_type"], "pie")
-        self.assertGreaterEqual(len(payload["summary"]["overall_analysis"]), 4)
+        self.assertGreaterEqual(len(payload["summary"]["overall_analysis"]), 2)
         self.assertLessEqual(sum(len(paragraph) for paragraph in payload["summary"]["overall_analysis"]), 700)
         self.assertEqual(payload["summary"]["overall_analysis"], payload["summary"]["overall_analysis_programmatic"])
         self.assertEqual(len(payload["summary"]["key_issue_analysis"]), 4)
@@ -469,8 +508,7 @@ class PipelineTest(unittest.TestCase):
             report_content = Path(temp_dir) / "content.md"
             report_content.write_text(
                 sample_markdown()
-                .replace("### 4.1药品疗效", "### 4.1药物认知与信息获取")
-                .replace("#### 血压控制效果分析", "#### 药物认知情况分析"),
+                .replace("### 4.1药品疗效", "### 4.8不存在的维度"),
                 encoding="utf-8",
             )
             meta, content = parse_markdown_content(report_content)
@@ -578,7 +616,7 @@ class PipelineTest(unittest.TestCase):
             overall_idx = texts.index("5.2调研结果分析")
             overall_end = texts.index("5.3建议")
             overall_paragraphs = texts[overall_idx + 1:overall_end]
-            self.assertGreaterEqual(len(overall_paragraphs), 4)
+            self.assertGreaterEqual(len(overall_paragraphs), 2)
             self.assertLessEqual(sum(len(paragraph) for paragraph in overall_paragraphs), 700)
             first_key_issue_para = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == key_issue_body[0])
             self.assertEqual(first_key_issue_para.alignment, 3)
@@ -789,7 +827,7 @@ class PipelineTest(unittest.TestCase):
 
             bad_payload = copy.deepcopy(payload)
             bad_payload["result_analysis"]["sections"] = bad_payload["result_analysis"]["sections"][:4]
-            with self.assertRaisesRegex(FinalValidationError, "section headings mismatch"):
+            with self.assertRaisesRegex(FinalValidationError, "section (count|headings) mismatch"):
                 validate_docx(output_docx, bad_payload)
 
             first_paragraph = payload["result_analysis"]["sections"][0]["subtopics"][0]["paragraphs"][0]
@@ -869,6 +907,85 @@ class PipelineTest(unittest.TestCase):
         self.assertNotIn("从当前题目反馈分布看", openings)
         for paragraph in paragraphs:
             self.assertTrue(is_complete_analysis(paragraph))
+
+    def test_derive_subtitle_uses_semantic_mapping_not_truncation(self) -> None:
+        from scripts.cluster_dimensions import cluster_dimensions
+        questionnaire = adherence_questionnaire()
+        grouped = cluster_dimensions(questionnaire)
+        for section in grouped["sections"]:
+            for subtopic in section.get("subtopics", []):
+                subtitle = subtopic.get("subtitle", "")
+                for pattern in [r"^(您|你|是否|怎么|什么|多少|哪个)", r"分析$.*(?:您|是否|怎么)"]:
+                    self.assertNotRegex(subtitle, pattern, f"口语化副标题: {subtitle}")
+
+    def test_ai_dimensions_override_hardcoded_template(self) -> None:
+        from scripts.cluster_dimensions import cluster_dimensions
+        questionnaire = adherence_questionnaire()
+        ai_dimensions = dynamic_ai_dimensions()
+        grouped = cluster_dimensions(questionnaire, ai_dimensions=ai_dimensions)
+        self.assertEqual(grouped["dimension_count"], 3)
+        self.assertEqual(len(grouped["project_dimensions"]), 3)
+        self.assertEqual(grouped["project_dimensions"][0], "药物认知与信息获取")
+        self.assertEqual(grouped["project_dimensions"][1], "用药行为与依从性")
+        self.assertEqual(grouped["project_dimensions"][2], "健康教育与支持需求")
+        self.assertEqual(grouped["sections"][0]["section_number"], "4.1")
+        self.assertEqual(grouped["sections"][0]["section_title"], "药物认知与信息获取")
+        self.assertEqual(grouped["sections"][0]["section_intro"], "本维度用于观察患者对药物作用的了解程度及信息来源结构。")
+        q01_refs = grouped["sections"][0]["subtopics"][0]["question_refs"]
+        self.assertTrue(any("q01" in r for r in q01_refs))
+        self.assertEqual(grouped["key_issue_preferred_sections"], ["4.1", "4.2"])
+        has_chart = any(vg.get("chart_type") is not None for vg in grouped["sections"][0]["visual_groups"])
+        self.assertTrue(has_chart)
+
+    def test_ai_dimensions_build_payload_integration(self) -> None:
+        ai_dimensions = dynamic_ai_dimensions()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(minimal_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            from scripts.build_payload import parse_dimensions_from_meta
+            parsed_dims = parse_dimensions_from_meta({"dimensions_json": json.dumps(ai_dimensions)})
+            self.assertEqual(parsed_dims["dimensions"][0]["name"], "药物认知与信息获取")
+            payload = build_payload(
+                adherence_questionnaire(),
+                {**meta, "dimensions_json": json.dumps(ai_dimensions)},
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+            output_docx = Path(temp_dir) / "dynamic_dimensions.docx"
+            TemplateRenderer(Path(payload["meta"]["template_doc"]), payload).render(output_docx)
+            validate_docx(output_docx, payload)
+        validate_payload(payload)
+        self.assertEqual(len(payload["result_analysis"]["sections"]), 3)
+        self.assertEqual(payload["result_analysis"]["sections"][0]["section_title"], "药物认知与信息获取")
+        self.assertEqual(payload["meta"]["template_type"], "依从性与用药习惯")
+
+    def test_dimensions_json_validation_rejects_bad_schema(self) -> None:
+        from scripts.build_payload import parse_dimensions_from_meta
+
+        invalid_cases = [
+            ("not json", "dimensions_json must be valid JSON"),
+            (json.dumps({"dimensions": []}), "dimensions_json.dimensions must be a non-empty list"),
+            (json.dumps({"dimensions": [{"name": "", "intro": "说明", "subtopics": []}]}), "dimensions_json.dimensions[0].name is required"),
+            (json.dumps({"dimensions": [{"name": "维度", "intro": "说明", "subtopics": [{"patterns": [], "subtitle": "标题"}]}]}), "patterns must be a non-empty list"),
+            (json.dumps({"dimensions": [{"name": "维度", "intro": "说明", "subtopics": [{"patterns": ["["], "subtitle": "标题"}]}]}), "invalid regex"),
+            (json.dumps({"dimensions": [{"name": "维度", "intro": "说明", "subtopics": [{"patterns": ["题目"], "subtitle": "标题"}], "charts": [{"patterns": ["题目"], "chart_type": "line", "chart_style_profile": "efficacy_pie"}]}]}), "chart_type must be one of"),
+        ]
+
+        for raw, message in invalid_cases:
+            with self.subTest(message=message):
+                with self.assertRaises(ValueError) as ctx:
+                    parse_dimensions_from_meta({"dimensions_json": raw})
+                self.assertIn(message, str(ctx.exception))
 
     def test_is_complete_analysis_rejects_old_style_or_invalid_length(self) -> None:
         old_style = "建议继续优化。就逐项分布而言，选择A.选项A的患者占39.13%。整体来看，前两项反馈占比很高。从共性特征看，当前反馈较积极。"

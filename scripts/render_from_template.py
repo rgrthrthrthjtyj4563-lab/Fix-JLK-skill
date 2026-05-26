@@ -2095,14 +2095,17 @@ class TemplateRenderer:
         (e.g., SDTs, content controls, embedded text boxes).
         """
         region = self.meta.get("region", "")
+        product = self.meta.get("product", "")
         survey_period = self.meta.get("survey_period", "")
-        if not region and not survey_period:
+        if not region and not product and not survey_period:
             return
         
         # Map old → new from the template's original data
         replacements = {}
         if region:
             replacements["广东省"] = region
+        if product and product != "厄贝沙坦氢氯噻嗪片":
+            replacements["厄贝沙坦氢氯噻嗪片"] = product
         sample_size = self.meta.get("sample_size") or self.meta.get("valid_count")
         if sample_size:
             replacements["1642"] = str(sample_size)

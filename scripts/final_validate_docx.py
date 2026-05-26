@@ -61,14 +61,19 @@ def _validate_result_sections(texts: list[str], payload: dict) -> None:
     except FinalValidationError:
         result_end = _find_text_index(texts, "5.1问卷重点问题分析", result_start + 1)
 
-    expected = [
-        _section_heading_text(section)
-        for section in payload["result_analysis"]["sections"]
-    ]
+    expected_section_count = len(payload.get("result_analysis", {}).get("sections", []))
     actual = [
         text
         for text in texts[result_start + 1:result_end]
         if re.match(r"^4\.\d+\S*", text)
+    ]
+    if len(actual) != expected_section_count:
+        raise FinalValidationError(
+            f"Result-analysis section count mismatch. expected={expected_section_count}, actual={len(actual)}"
+        )
+    expected = [
+        _section_heading_text(section)
+        for section in payload["result_analysis"]["sections"]
     ]
     if actual != expected:
         raise FinalValidationError(f"Result-analysis section headings mismatch. expected={expected}, actual={actual}")
@@ -385,6 +390,31 @@ def _validate_font_xml(docx_path: Path) -> None:
             raise FinalValidationError(f"Unexpected font in visible text run: {values}")
 
 
+def _validate_subtitle_formality(payload: dict) -> None:
+    ORAL_INDICATORS = [
+        r"^(您|你|我|他|她|它|咱们|大家)",
+        r"是否",
+        r"怎么会",
+        r"什么$",
+        r"多少",
+        r"哪个",
+        r"哪里",
+        r"能不能",
+        r"会不会",
+        r"有没有",
+    ]
+    for section in payload.get("result_analysis", {}).get("sections", []):
+        for subtopic in section.get("subtopics", []):
+            subtitle = str(subtopic.get("subtitle", "")).strip()
+            if not subtitle:
+                continue
+            for pattern in ORAL_INDICATORS:
+                if re.search(pattern, subtitle):
+                    raise FinalValidationError(
+                        f"口语化副标题: '{subtitle}'，应为归纳性短语如'漏服应对行为分析'"
+                    )
+
+
 def validate_docx(docx_path: Path, payload: dict) -> None:
     doc = Document(str(docx_path))
     texts = _visible_paragraph_texts(doc)
@@ -392,6 +422,7 @@ def validate_docx(docx_path: Path, payload: dict) -> None:
     _validate_result_sections(texts, payload)
     _validate_analysis_paragraphs(texts, payload)
     _validate_analysis_opening_diversity(payload)
+    _validate_subtitle_formality(payload)
     _validate_result_tables(doc, payload)
     _validate_result_table_blocks(docx_path, payload)
     _validate_key_issue_text(texts, payload)

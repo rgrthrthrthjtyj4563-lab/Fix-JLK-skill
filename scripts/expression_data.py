@@ -100,7 +100,11 @@ def _infer_question_type(question_text: str) -> str:
         return "information"
     if re.search(r"渠道|购买", text):
         return "channel"
-    if re.search(r"剂量|医嘱|联合用药|监测血压|监测频率|提醒|依从|忘记|漏服|服药", text):
+    if re.search(r"时间|次数|频次", text):
+        return "convenience"
+    if re.search(r"漏服|忘记|自行调整|调整.*剂量|剂量|医嘱|联合用药|监测血压|监测频率|提醒|依从|坚持规律", text):
+        return "behavior"
+    if re.search(r"服药", text):
         return "behavior"
     if re.search(r"包装|便利|频率", text):
         return "convenience"
@@ -130,7 +134,7 @@ def _topic_label(question_text: str, question_type: str) -> str:
         (r"教育程度", "患者基础教育背景"),
         (r"健康教育", "健康教育支持需求"),
         (r"忘记|漏服", "漏服应对行为"),
-        (r"服药时间", "服药时间安排"),
+        (r"服用.*时间|什么时间.*服用|服药时间", "服药时间安排"),
         (r"服用.*次数|每日服用", "每日服药频次"),
         (r"自行调整|调整.*剂量", "剂量自我调整行为"),
         (r"不良反应", "不良反应应对行为"),
