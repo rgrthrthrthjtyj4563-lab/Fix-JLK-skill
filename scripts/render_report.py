@@ -340,7 +340,7 @@ def render_report(payload: dict, output_docx: Path) -> Path:
     add_heading(doc, "5.1问卷重点问题分析", 2)
     for paragraph in payload["summary"]["key_issue_analysis"]:
         add_body(doc, paragraph)
-    add_heading(doc, "5.2调研结果分析", 2)
+    add_heading(doc, "5.2调研结果总结", 2)
     for paragraph in payload["summary"]["overall_analysis"]:
         add_body(doc, paragraph)
     add_heading(doc, "5.3建议", 2)

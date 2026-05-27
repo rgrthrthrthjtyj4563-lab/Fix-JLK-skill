@@ -481,7 +481,10 @@ def build_questionnaire_note(question_count: int) -> dict:
     return {"intro": intro, "items": items, "closing": closing}
 
 
-def derive_report_title(product: str, grouped: dict) -> str:
+def derive_report_title(theme: str | None = None) -> str:
+    theme_text = normalize_space(theme or "")
+    if theme_text:
+        return f"{theme_text}问卷调研分析报告"
     return "问卷调研分析报告"
 
 
@@ -869,7 +872,8 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
     product = cli_args.product or meta.get("product") or meta.get("品种")
     region = cli_args.region or meta.get("region") or meta.get("地区")
     question_count = questionnaire.get("question_count", len(questionnaire.get("questions", [])))
-    report_title = derive_report_title(product, grouped)
+    theme = getattr(cli_args, "theme", None) or meta.get("theme") or meta.get("主题")
+    report_title = derive_report_title(theme)
 
     ai_sections = content.get("result_analysis", [])
     ai_by_sn = {}
@@ -1112,6 +1116,7 @@ def main() -> None:
     parser.add_argument("--product")
     parser.add_argument("--region")
     parser.add_argument("--time")
+    parser.add_argument("--theme")
     parser.add_argument("--attachment-name")
     parser.add_argument("--survey-period")
     parser.add_argument("--sample-size")

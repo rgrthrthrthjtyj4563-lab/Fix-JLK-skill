@@ -856,16 +856,19 @@ class TemplateRenderer:
         if not title:
             return
 
-        # Find the title paragraph (after 前言, before 项目背景)
-        idx = self._find_anchor_index("用药体验与疗效反馈患者调查问卷分析报告")
-        if idx is None:
-            idx = self._find_anchor_index("调查问卷分析报告")
-        if idx is None:
-            return
-
-        p = self._get_paragraph_at(idx)
-        _set_paragraph_text(p, title)
-        _set_paragraph_style_props(p, "汉仪中宋简", 22, True, "center")
+        replaced = False
+        for info in list(self.anchors.values()):
+            if info.get("type") != "p":
+                continue
+            paragraph = info["elem"]
+            text = _get_paragraph_text(paragraph).strip()
+            if "调查问卷分析报告" not in text:
+                continue
+            _set_paragraph_text(paragraph, title)
+            _set_paragraph_style_props(paragraph, "汉仪中宋简", 22, True, "center")
+            replaced = True
+        if replaced:
+            self._rebuild_anchors()
 
     def replace_project_background(self):
         """Replace project background paragraphs with structured 4-section content."""
@@ -1277,6 +1280,11 @@ class TemplateRenderer:
         """Replace 调研结果 summary sections."""
         summary = self.payload.get("summary", {})
 
+        old_overall_idx = self._find_exact_paragraph_index("5.2调研结果分析")
+        if old_overall_idx is not None:
+            _set_paragraph_text(self._get_paragraph_at(old_overall_idx), "5.2调研结果总结")
+            self._rebuild_anchors()
+
         self._ensure_summary_headings()
         self._rebuild_anchors()
 
@@ -1285,11 +1293,11 @@ class TemplateRenderer:
         if key_issue_items:
             self._replace_key_issue_section(key_issue_items)
 
-        # 5.2 调研结果分析
+        # 5.2 调研结果总结
         overall = summary.get("overall_analysis", [])
         if overall:
             self._replace_section_body_by_heading(
-                "5.2调研结果分析",
+                "5.2调研结果总结",
                 "5.3建议",
                 overall,
             )
@@ -1308,7 +1316,13 @@ class TemplateRenderer:
         if self._find_exact_paragraph_index("调研结果") is not None and self._find_exact_paragraph_index("5.1问卷重点问题分析") is not None:
             return
 
-        anchor_idx = self._find_exact_paragraph_index("5.2调研结果分析")
+        anchor_idx = self._find_exact_paragraph_index("5.2调研结果总结")
+        if anchor_idx is None:
+            old_anchor_idx = self._find_exact_paragraph_index("5.2调研结果分析")
+            if old_anchor_idx is not None:
+                _set_paragraph_text(self._get_paragraph_at(old_anchor_idx), "5.2调研结果总结")
+                self._rebuild_anchors()
+                anchor_idx = self._find_exact_paragraph_index("5.2调研结果总结")
         if anchor_idx is None:
             return
         ref_child = self._get_paragraph_at(anchor_idx)
@@ -1517,7 +1531,7 @@ class TemplateRenderer:
 
         self._rebuild_anchors()
         start_idx = self._find_exact_paragraph_index("5.1问卷重点问题分析")
-        end_idx = self._find_exact_paragraph_index("5.2调研结果分析", start=(start_idx + 1) if start_idx is not None else 0)
+        end_idx = self._find_exact_paragraph_index("5.2调研结果总结", start=(start_idx + 1) if start_idx is not None else 0)
         if start_idx is None or end_idx is None or end_idx <= start_idx:
             self._rebuild_anchors()
             return
@@ -1541,7 +1555,7 @@ class TemplateRenderer:
 
     def _replace_key_issue_section(self, key_issue_items: list[dict]):
         start_idx = self._find_exact_paragraph_index("5.1问卷重点问题分析")
-        end_idx = self._find_exact_paragraph_index("5.2调研结果分析", start=(start_idx + 1) if start_idx is not None else 0)
+        end_idx = self._find_exact_paragraph_index("5.2调研结果总结", start=(start_idx + 1) if start_idx is not None else 0)
         if start_idx is None or end_idx is None or end_idx <= start_idx:
             return
 
@@ -1668,7 +1682,7 @@ class TemplateRenderer:
         if att_name:
             p = self._get_paragraph_at(idx)
             _set_paragraph_text(p, f"附件1：{att_name}")
-            _set_paragraph_style_props(p, "汉仪中宋简", 16, True, "left")
+            _set_paragraph_style_props(p, "汉仪中宋简", 22, True, "left")
 
         attachment2_idx = self._find_anchor_index("附件2", start=idx + 1)
         if attachment2_idx is None:

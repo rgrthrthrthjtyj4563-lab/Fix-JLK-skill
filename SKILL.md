@@ -1,5 +1,5 @@
 ---
-name: "JLK-Pt-skill"
+name: "Rand- JLK- skill"
 description: "Use when generating patient questionnaire analysis reports for pharmaceutical clients from uploaded survey spreadsheets or questionnaire tables, especially when the output must inherit the original Word template, including TOC, preface, header, title hierarchy, tables, and chart styles."
 ---
 
@@ -33,10 +33,11 @@ description: "Use when generating patient questionnaire analysis reports for pha
    - `前言` 正文
    - `项目背景` 正文
    - 各 `4.x` 小节的分析正文
-   - `5.2 调研结果分析` 正文
+   - `5.2 调研结果总结` 正文
    - `5.3 建议` 正文
    不能决定模板分类、`4.x` 标题、`4.x` 引言、`5.1` 重点题目或图表点位。`4.x` 小标题由程序语义映射给出归纳性兜底值（如"漏服应对行为分析"），AI 草稿可在此基础上优化覆盖，但校验拒绝口语化截取类型的标题（如"您忘记服药后通常分析"）。
    - 可选：在 front matter 中通过 `dimensions_json` 字段声明维度结构（JSON 格式），AI 可以据此为任意新品种定义维度名称、引言、小标题和图表配置，实现新品种的动态适配。
+   - 可选：当用户提示词提供 `主题：...` 时，必须在 front matter 中写入 `theme` 或 `主题` 字段。程序会按 `{主题}问卷调研分析报告` 原样拼接，并同步替换封面标题、项目背景上方标题和页眉。
    - `dimensions_json` 格式示例：
      ```json
      {"dimensions": [
@@ -95,7 +96,7 @@ description: "Use when generating patient questionnaire analysis reports for pha
 ## 5.3 建议 AI 写作规范
 
 ### 输出位置
-在 `report_content.md` 的 `## 调研结果` 章节末尾，以 `### 5.3 建议` 为标题输出。前面必须已经输出 `### 5.1 问卷重点问题分析` 和 `### 5.2 调研结果分析`。
+在 `report_content.md` 的 `## 调研结果` 章节末尾，以 `### 5.3 建议` 为标题输出。前面必须已经输出 `### 5.1 问卷重点问题分析` 和 `### 5.2 调研结果总结`。
 
 ### 结构要求
 1. **导语**（1 段，50-80 字）：以「基于/结合调研结果，为进一步……，提出以下建议：」开头，必须点名 `{product}` 和本次调研发现的核心问题方向（如依从性、认知偏差、监测缺失等）。

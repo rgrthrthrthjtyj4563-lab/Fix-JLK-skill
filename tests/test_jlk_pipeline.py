@@ -489,6 +489,48 @@ class PipelineTest(unittest.TestCase):
         self.assertFalse(all(paragraph.startswith("从当前题目反馈分布看") for paragraph in analysis_paragraphs))
         self.assertGreaterEqual(len(set(openings)), int(len(openings) * 0.7))
 
+    def test_theme_replaces_report_title_and_header(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown().replace("---\nproduct:", "---\ntheme: 患者用药疗效\nproduct:"), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+            self.assertEqual(payload["report_title"], "患者用药疗效问卷调研分析报告")
+            self.assertEqual(payload["header_text"], "患者用药疗效问卷调研分析报告")
+
+            override_payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    theme="慢病规范管理",
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+            self.assertEqual(override_payload["report_title"], "慢病规范管理问卷调研分析报告")
+            self.assertEqual(override_payload["header_text"], "慢病规范管理问卷调研分析报告")
+
     def test_adherence_payload_uses_diverse_analysis_openings(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             report_content = Path(temp_dir) / "content.md"
@@ -562,7 +604,7 @@ class PipelineTest(unittest.TestCase):
     def test_render_from_template_preserves_template_pages_and_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             report_content = Path(temp_dir) / "content.md"
-            report_content.write_text(sample_markdown(), encoding="utf-8")
+            report_content.write_text(sample_markdown().replace("---\nproduct:", "---\ntheme: 患者用药疗效\nproduct:"), encoding="utf-8")
             meta, content = parse_markdown_content(report_content)
             payload = build_payload(
                 efficacy_questionnaire(),
@@ -613,6 +655,8 @@ class PipelineTest(unittest.TestCase):
             self.assertGreaterEqual(len(document.tables), len(expected_table_questions) + 1)
             self.assertEqual(len(document.sections), 5)
             self.assertEqual(document.sections[0].header.paragraphs[0].text, payload["header_text"])
+            self.assertEqual(payload["report_title"], "患者用药疗效问卷调研分析报告")
+            self.assertEqual(payload["header_text"], "患者用药疗效问卷调研分析报告")
             self.assertIn("项目工具：调查问卷，14道选择题。其内容涵盖药品疗效、药品安全性、用药行为与习惯、用药便利性、药品经济性、药品可及性、用药指导信息评价7大维度，全面覆盖患者用药全流程关键节点。", texts)
             self.assertIn("样本采集时间：2025年10月01日——2025年10月31日", texts)
             self.assertIn(f"服务单位：{payload['service']['unit']}", texts)
@@ -625,7 +669,7 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(service_para.alignment, 2)
             self.assertEqual(date_para.alignment, 2)
             key_issue_idx = texts.index("5.1问卷重点问题分析")
-            key_issue_end = texts.index("5.2调研结果分析")
+            key_issue_end = texts.index("5.2调研结果总结")
             key_issue_body = texts[key_issue_idx + 1:key_issue_end]
             self.assertNotIn("重点问题分析", key_issue_body)
             self.assertNotIn("1. 血压控制现状与特征", key_issue_body)
@@ -633,7 +677,8 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(len(key_issue_body), len(payload["summary"]["key_issue_items"]))
             self.assertTrue(any("血压控制" in paragraph for paragraph in key_issue_body))
             self.assertTrue(any("不良反应" in paragraph for paragraph in key_issue_body))
-            overall_idx = texts.index("5.2调研结果分析")
+            self.assertNotIn("5.2调研结果分析", texts)
+            overall_idx = texts.index("5.2调研结果总结")
             overall_end = texts.index("5.3建议")
             overall_paragraphs = texts[overall_idx + 1:overall_end]
             self.assertGreaterEqual(len(overall_paragraphs), 2)
@@ -707,7 +752,7 @@ class PipelineTest(unittest.TestCase):
             result_idx = next(i for i, paragraph in enumerate(document.paragraphs) if paragraph.text.strip() == "问卷结果分析")
             section_41_idx = next(i for i, paragraph in enumerate(document.paragraphs) if paragraph.text.strip() == "4.1 药品疗效")
             key_issue_heading_idx = next(i for i, paragraph in enumerate(document.paragraphs) if paragraph.text.strip() == "5.1问卷重点问题分析")
-            key_issue_end_idx = next(i for i, paragraph in enumerate(document.paragraphs) if paragraph.text.strip() == "5.2调研结果分析")
+            key_issue_end_idx = next(i for i, paragraph in enumerate(document.paragraphs) if paragraph.text.strip() == "5.2调研结果总结")
             result_drawings = [i for i in drawing_indices if result_idx < i < section_41_idx]
             key_issue_drawings = [i for i in drawing_indices if key_issue_heading_idx < i < key_issue_end_idx]
             self.assertEqual(len(result_drawings), 2)
@@ -725,6 +770,9 @@ class PipelineTest(unittest.TestCase):
             attachment2_idx = texts.index("附件2：问卷调查明细表")
             attachment_body = texts[attachment1_idx + 1:attachment2_idx]
             expected_questions = payload["attachments"]["attachment1_questions"]
+            attachment_heading = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == f"附件1：{payload['attachments']['attachment1_name']}")
+            self.assertTrue(attachment_heading.runs)
+            self.assertEqual(attachment_heading.runs[0].font.size.pt, 22)
             self.assertEqual(attachment_body[0], "（1） 您服用厄贝沙坦氢氯噻嗪片后，血压控制效果如何？")
             self.assertEqual(attachment_body[1:5], ["A. 选项A", "B. 选项B", "C. 选项C", "D. 选项D"])
             self.assertEqual(attachment_body[5], "（2） 您服用厄贝沙坦氢氯噻嗪片期间，是否出现过头晕、头痛症状？")

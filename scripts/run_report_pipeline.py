@@ -65,6 +65,7 @@ def main() -> None:
     parser.add_argument("--product")
     parser.add_argument("--region")
     parser.add_argument("--time")
+    parser.add_argument("--theme")
     parser.add_argument("--attachment-name")
     parser.add_argument("--survey-period")
     parser.add_argument("--sample-size")

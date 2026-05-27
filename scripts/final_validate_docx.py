@@ -315,7 +315,7 @@ def _validate_png_chart_layout(docx_path: Path, payload: dict) -> None:
     first_section = next(iter(payload.get("result_analysis", {}).get("sections", [])), {})
     section_idx = index_of(_section_heading_text(first_section)) if first_section else None
     key_start = index_of("5.1问卷重点问题分析")
-    key_end = index_of("5.2调研结果分析")
+    key_end = index_of("5.2调研结果总结")
 
     def drawings_between(start: int | None, end: int | None) -> tuple[int, int]:
         if start is None or end is None or end <= start:
@@ -353,7 +353,7 @@ def _validate_png_chart_layout(docx_path: Path, payload: dict) -> None:
 
 def _validate_key_issue_text(texts: list[str], payload: dict) -> None:
     start = _find_text_index(texts, "5.1问卷重点问题分析")
-    end = _find_text_index(texts, "5.2调研结果分析", start + 1)
+    end = _find_text_index(texts, "5.2调研结果总结", start + 1)
     body = texts[start + 1:end]
     old_headings = {
         str(item.get("heading", "")).strip()
