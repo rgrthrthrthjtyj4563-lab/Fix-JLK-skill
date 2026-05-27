@@ -23,6 +23,7 @@ import shutil
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
+from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +33,7 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.text.paragraph import Paragraph
+from openpyxl import Workbook
 
 
 # ─── OOXML Namespace constants ───────────────────────────────────────────────
@@ -44,6 +46,7 @@ NS = {
     "mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
     "c14": "http://schemas.microsoft.com/office/drawing/2007/8/2/chart",
 }
+DEFAULT_FONT = "宋体"
 
 
 def _register_namespaces():
@@ -118,6 +121,27 @@ def _paragraph_has_drawing(p_element) -> bool:
         run.find(qn("w:drawing")) is not None or run.find(qn("w:pict")) is not None
         for run in p_element.findall(qn("w:r"))
     )
+
+
+def _paragraph_has_chart(p_element) -> bool:
+    return bool(p_element.findall(".//c:chart", NS))
+
+
+def _clone_first_chart_paragraph(p_element, relationship_id: str):
+    cloned = copy.deepcopy(p_element)
+    kept_chart = False
+    for run in list(cloned.findall(qn("w:r"))):
+        charts = run.findall(".//c:chart", NS)
+        if not charts or kept_chart:
+            cloned.remove(run)
+            continue
+        charts[0].set(qn("r:id"), relationship_id)
+        for extra_chart in charts[1:]:
+            parent = extra_chart.getparent() if hasattr(extra_chart, "getparent") else None
+            if parent is not None:
+                parent.remove(extra_chart)
+        kept_chart = True
+    return cloned if kept_chart else None
 
 
 def _set_run_text(run_element, text: str):
@@ -371,6 +395,9 @@ def _update_chart_data(chart_xml_path: Path, categories: list[str], values: list
         num_ref = c_cat.find(f"{{{c_ns}}}numRef")
 
         if str_ref is not None:
+            formula = str_ref.find(f"{{{c_ns}}}f")
+            if formula is not None:
+                formula.text = f"Sheet1!$A$2:$A${len(categories) + 1}"
             # Update strCache
             str_cache = str_ref.find(f"{{{c_ns}}}strCache")
             if str_cache is not None:
@@ -408,6 +435,9 @@ def _update_chart_data(chart_xml_path: Path, categories: list[str], values: list
     for c_val in root.iter(f"{{{c_ns}}}val"):
         num_ref = c_val.find(f"{{{c_ns}}}numRef")
         if num_ref is not None:
+            formula = num_ref.find(f"{{{c_ns}}}f")
+            if formula is not None:
+                formula.text = f"Sheet1!$B$2:$B${len(values) + 1}"
             num_cache = num_ref.find(f"{{{c_ns}}}numCache")
             if num_cache is not None:
                 format_code = num_cache.find(f"{{{c_ns}}}formatCode")
@@ -430,6 +460,9 @@ def _update_chart_data(chart_xml_path: Path, categories: list[str], values: list
         if cat_elem is not None:
             str_ref = cat_elem.find(f"{{{c_ns}}}strRef")
             if str_ref is not None:
+                formula = str_ref.find(f"{{{c_ns}}}f")
+                if formula is not None:
+                    formula.text = f"Sheet1!$A$2:$A${len(categories) + 1}"
                 str_cache = str_ref.find(f"{{{c_ns}}}strCache")
                 if str_cache is not None:
                     for pt in list(str_cache.findall(f"{{{c_ns}}}pt")):
@@ -446,6 +479,9 @@ def _update_chart_data(chart_xml_path: Path, categories: list[str], values: list
         if val_elem is not None:
             num_ref = val_elem.find(f"{{{c_ns}}}numRef")
             if num_ref is not None:
+                formula = num_ref.find(f"{{{c_ns}}}f")
+                if formula is not None:
+                    formula.text = f"Sheet1!$B$2:$B${len(values) + 1}"
                 num_cache = num_ref.find(f"{{{c_ns}}}numCache")
                 if num_cache is not None:
                     for pt in list(num_cache.findall(f"{{{c_ns}}}pt")):
@@ -582,25 +618,56 @@ class TemplateRenderer:
         tbl = self._get_table_at(tbl_idx)
         rows = tbl.findall(qn("w:tr"))
 
-        sample_size = self.meta.get("sample_size") or self.meta.get("valid_count") or "问卷未提供"
+        settlement = self.payload.get("service", {}).get("settlement", {})
+        sample_size = settlement.get("sample_count") or self.meta.get("sample_size") or self.meta.get("valid_count") or "问卷未提供"
+
+        def money(value: object) -> str:
+            try:
+                return f"{int(value):,}"
+            except Exception:
+                return str(value or "")
+
+        def set_cell_text(cell, text: str) -> None:
+            paragraphs = cell.findall(qn("w:p"))
+            if not paragraphs:
+                p = OxmlElement("w:p")
+                cell.append(p)
+                paragraphs = [p]
+            _set_paragraph_text(paragraphs[0], text)
+            _set_paragraph_style_props(paragraphs[0], "宋体", 11, False, "center")
+            for extra in paragraphs[1:]:
+                cell.remove(extra)
 
         # Row 1: sample data (index 0-based = 1)
         if len(rows) >= 2:
             cells = rows[1].findall(qn("w:tc"))
             # cells[3] = count, cells[4] = total
             if len(cells) >= 4:
-                # Set sample count
-                for p in cells[3].findall(qn("w:p")):
-                    for r in p.findall(qn("w:r")):
-                        for t in r.findall(qn("w:t")):
-                            t.text = f"{sample_size}例"
-                            t.set(qn("xml:space"), "preserve")
+                set_cell_text(cells[3], f"{sample_size}例")
             if len(cells) >= 5:
-                for p in cells[4].findall(qn("w:p")):
-                    for r in p.findall(qn("w:r")):
-                        for t in r.findall(qn("w:t")):
-                            t.text = f"{sample_size}00元"
-                            t.set(qn("xml:space"), "preserve")
+                sample_amount = settlement.get("sample_amount")
+                if sample_amount is None:
+                    try:
+                        sample_amount = int(sample_size) * 100
+                    except Exception:
+                        sample_amount = ""
+                set_cell_text(cells[4], money(sample_amount))
+
+        if len(rows) >= 3:
+            cells = rows[2].findall(qn("w:tc"))
+            if len(cells) >= 5:
+                set_cell_text(cells[4], money(settlement.get("report_amount", 30000)))
+
+        if len(rows) >= 4:
+            cells = rows[3].findall(qn("w:tc"))
+            if len(cells) >= 5:
+                total = settlement.get("total_amount")
+                if total is None:
+                    try:
+                        total = int(sample_size) * 100 + 30000
+                    except Exception:
+                        total = ""
+                set_cell_text(cells[4], money(total))
 
     # ─── Section 3: Service Unit ────────────────────────────────────────
 
@@ -614,7 +681,7 @@ class TemplateRenderer:
             if info["type"] == "p" and "服务单位" in info["text"]:
                 p = self._get_paragraph_at(i)
                 _set_paragraph_text(p, f"服务单位：{unit}")
-                _set_paragraph_style_props(p, "汉仪中宋简", 12, False, "right")
+                _set_paragraph_style_props(p, "宋体", 12, False, "right")
                 if date_str:
                     new_p = OxmlElement("w:p")
                     r = OxmlElement("w:r")
@@ -625,7 +692,7 @@ class TemplateRenderer:
                     new_p.append(r)
                     parent = self.body
                     parent.insert(list(parent).index(p) + 1, new_p)
-                    _set_paragraph_style_props(new_p, "汉仪中宋简", 12, False, "right")
+                    _set_paragraph_style_props(new_p, "宋体", 12, False, "right")
                 self._rebuild_anchors()
                 break
 
@@ -669,7 +736,7 @@ class TemplateRenderer:
             r.append(t)
             toc_heading.append(r)
             parent.insert(insert_at, toc_heading)
-            _set_paragraph_style_props(toc_heading, "汉仪中宋简", 16, True, "left")
+            _set_paragraph_style_props(toc_heading, "宋体", 16, True, "left")
             insert_at += 1
 
         # Create a new paragraph with TOC field
@@ -714,7 +781,7 @@ class TemplateRenderer:
 
         # Replace SDT with new paragraph
         parent.replace(sdt_elem, new_p)
-        _set_paragraph_style_props(new_p, "汉仪中宋简", 12, False, "left")
+        _set_paragraph_style_props(new_p, "宋体", 12, False, "left")
         # Rebuild anchors because body structure changed
         self._rebuild_anchors()
 
@@ -817,7 +884,7 @@ class TemplateRenderer:
 
         heading = self._get_paragraph_at(idx)
         _strip_numPr(heading)
-        _set_paragraph_style_props(heading, "汉仪中宋简", 22, True, "center")
+        _set_paragraph_style_props(heading, "宋体", 22, True, "center")
 
         title_idx = self._find_anchor_index("调查问卷分析报告", start=idx + 1)
         if title_idx is None:
@@ -842,7 +909,7 @@ class TemplateRenderer:
         for index, paragraph in enumerate(body_paragraphs):
             if index < len(preface):
                 _set_paragraph_text(paragraph, preface[index])
-                _set_paragraph_style_props(paragraph, "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(paragraph, "宋体", 12, False)
             else:
                 parent = paragraph.getparent()
                 if parent is not None:
@@ -865,7 +932,7 @@ class TemplateRenderer:
             if "调查问卷分析报告" not in text:
                 continue
             _set_paragraph_text(paragraph, title)
-            _set_paragraph_style_props(paragraph, "汉仪中宋简", 22, True, "center")
+            _set_paragraph_style_props(paragraph, "宋体", 22, True, "center")
             replaced = True
         if replaced:
             self._rebuild_anchors()
@@ -882,7 +949,7 @@ class TemplateRenderer:
             return
 
         heading = self._get_paragraph_at(idx)
-        _set_paragraph_style_props(heading, "汉仪中宋简", 16, True, "left")
+        _set_paragraph_style_props(heading, "宋体", 16, True, "left")
 
         # Background paragraphs follow the heading
         bg_indices = []
@@ -900,7 +967,7 @@ class TemplateRenderer:
             if pi < len(paragraphs):
                 p = self._get_paragraph_at(bi)
                 _set_paragraph_text(p, paragraphs[pi])
-                _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(p, "宋体", 12, False)
             else:
                 # Remove extra template paragraphs
                 p = self._get_paragraph_at(bi)
@@ -920,7 +987,7 @@ class TemplateRenderer:
         if title_idx is None:
             return
         heading = self._get_paragraph_at(title_idx)
-        _set_paragraph_style_props(heading, "汉仪中宋简", 16, True, "left")
+        _set_paragraph_style_props(heading, "宋体", 16, True, "left")
 
         target_indices = []
         for i in range(title_idx + 1, title_idx + 12):
@@ -939,7 +1006,7 @@ class TemplateRenderer:
             if line_index < len(target_indices):
                 p = self._get_paragraph_at(target_indices[line_index])
                 _set_paragraph_text(p, line)
-                _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(p, "宋体", 12, False)
         for extra_idx in target_indices[len(lines):]:
             p = self._get_paragraph_at(extra_idx)
             p.getparent().remove(p)
@@ -955,14 +1022,14 @@ class TemplateRenderer:
         if idx is None:
             return
         heading = self._get_paragraph_at(idx)
-        _set_paragraph_style_props(heading, "汉仪中宋简", 16, True, "left")
+        _set_paragraph_style_props(heading, "宋体", 16, True, "left")
 
         # Intro paragraph (first after heading)
         intro_idx = idx + 1
         if intro_idx in self.anchors:
             p = self._get_paragraph_at(intro_idx)
             _set_paragraph_text(p, qn_data.get("intro", ""))
-            _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
+            _set_paragraph_style_props(p, "宋体", 12, False)
 
         # Items: find the numbered items (1．, 2．, 3．, 4．)
         items = qn_data.get("items", [])
@@ -979,14 +1046,14 @@ class TemplateRenderer:
             if pi < len(items):
                 p = self._get_paragraph_at(bi)
                 _set_paragraph_text(p, items[pi])
-                _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(p, "宋体", 12, False)
 
         # Closing paragraph (after items)
         closing_idx = (item_indices[-1] + 1) if item_indices else intro_idx + 5
         if closing_idx in self.anchors:
             p = self._get_paragraph_at(closing_idx)
             _set_paragraph_text(p, qn_data.get("closing", ""))
-            _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
+            _set_paragraph_style_props(p, "宋体", 12, False)
 
     def replace_result_analysis_intro(self):
         """Replace the intro paragraph for 问卷结果分析."""
@@ -998,14 +1065,14 @@ class TemplateRenderer:
         if idx is None:
             return
         heading = self._get_paragraph_at(idx)
-        _set_paragraph_style_props(heading, "汉仪中宋简", 16, True, "left")
+        _set_paragraph_style_props(heading, "宋体", 16, True, "left")
 
         # Intro is the paragraph right after (before the chart)
         intro_idx = idx + 1
         if intro_idx in self.anchors and self.anchors[intro_idx]["type"] == "p":
             p = self._get_paragraph_at(intro_idx)
             _set_paragraph_text(p, intro[0] if intro else "")
-            _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
+            _set_paragraph_style_props(p, "宋体", 12, False)
 
     def replace_analysis_sections(self):
         """Replace all 4.x analysis sections in-place.
@@ -1134,7 +1201,7 @@ class TemplateRenderer:
 
             section_title = payload_sec.get("section_title", "")
             _set_paragraph_text(child, f"{sec_num} {section_title}".strip())
-            _set_paragraph_style_props(child, "汉仪中宋简", 16, True, "left")
+            _set_paragraph_style_props(child, "宋体", 16, True, "left")
 
             subtopics = payload_sec.get("subtopics", [])
             visual_groups = payload_sec.get("visual_groups", [])
@@ -1164,7 +1231,7 @@ class TemplateRenderer:
                 subtitle = subtopic.get("subtitle", "")
                 _set_paragraph_text(unit["heading"], f"（{unit_idx + 1}） {subtitle}".strip())
                 _strip_numPr(unit["heading"])
-                _set_paragraph_style_props(unit["heading"], "汉仪中宋简", 12, True, "left")
+                _set_paragraph_style_props(unit["heading"], "宋体", 12, True, "left")
 
                 question_refs = subtopic.get("question_refs", [])
                 tables = ensure_tables(unit, len(question_refs), unit["heading"])
@@ -1201,7 +1268,7 @@ class TemplateRenderer:
                 for para_idx, paragraph in enumerate(body_paragraphs):
                     if para_idx < len(paragraphs):
                         _set_paragraph_text(paragraph, paragraphs[para_idx])
-                        _set_paragraph_style_props(paragraph, "汉仪中宋简", 12, False)
+                        _set_paragraph_style_props(paragraph, "宋体", 12, False)
                     else:
                         remove_element(paragraph)
 
@@ -1338,7 +1405,7 @@ class TemplateRenderer:
             r.append(t)
             new_p.append(r)
             ref_child.addprevious(new_p)
-            _set_paragraph_style_props(new_p, "汉仪中宋简", 16, True, "left")
+            _set_paragraph_style_props(new_p, "宋体", 16, True, "left")
 
     def _make_chart_png(self, chart: dict, output_path: Path, role: str = "overview") -> Optional[Path]:
         categories = [str(value) for value in chart.get("categories", []) if str(value)]
@@ -1516,6 +1583,14 @@ class TemplateRenderer:
             if found_intro and _paragraph_has_drawing(child):
                 drawing_paragraphs.append(child)
 
+        native_pie_template = None
+        for paragraph in drawing_paragraphs:
+            if not _paragraph_has_chart(paragraph):
+                continue
+            native_pie_template = _clone_first_chart_paragraph(paragraph, "rIdJlkKeyIssueChart1")
+            if native_pie_template is not None:
+                break
+
         for idx, png in enumerate(overview_pngs):
             if idx < len(drawing_paragraphs):
                 self._replace_paragraph_with_image(drawing_paragraphs[idx], png)
@@ -1536,20 +1611,13 @@ class TemplateRenderer:
             self._rebuild_anchors()
             return
 
-        insert_before = self._get_paragraph_at(start_idx + 1) if start_idx + 1 < end_idx else self._get_paragraph_at(end_idx)
-        for idx, item in enumerate(key_issue_items[:2]):
-            chart = {
-                "title": item.get("chart_title", ""),
-                "chart_type": item.get("chart_type", "pie"),
-                "categories": item.get("categories", []),
-                "values": item.get("values", []),
-            }
-            png = self._make_chart_png(chart, chart_dir / f"key_issue_{idx + 1}.png", role="key_issue")
-            if not png:
-                continue
-            image_p = OxmlElement("w:p")
-            insert_before.addprevious(image_p)
-            self._replace_paragraph_with_image(image_p, png)
+        if native_pie_template is not None:
+            insert_before = self._get_paragraph_at(start_idx + 1) if start_idx + 1 < end_idx else self._get_paragraph_at(end_idx)
+            for idx in range(min(2, len(key_issue_items))):
+                chart_paragraph = copy.deepcopy(native_pie_template)
+                for chart in chart_paragraph.findall(".//c:chart", NS):
+                    chart.set(qn("r:id"), f"rIdJlkKeyIssueChart{idx + 1}")
+                insert_before.addprevious(chart_paragraph)
 
         self._rebuild_anchors()
 
@@ -1577,7 +1645,7 @@ class TemplateRenderer:
                 _set_paragraph_text(text_paragraphs[pi], text)
                 _set_paragraph_style_props(
                     text_paragraphs[pi],
-                    "汉仪中宋简",
+                    "宋体",
                     12,
                     False,
                     "both",
@@ -1595,7 +1663,7 @@ class TemplateRenderer:
                 insert_before.addprevious(new_p)
                 _set_paragraph_style_props(
                     new_p,
-                    "汉仪中宋简",
+                    "宋体",
                     12,
                     False,
                     "both",
@@ -1626,7 +1694,7 @@ class TemplateRenderer:
         for pi, text in enumerate(new_paragraphs):
             if pi < len(body_paragraphs):
                 _set_paragraph_text(body_paragraphs[pi], text)
-                _set_paragraph_style_props(body_paragraphs[pi], "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(body_paragraphs[pi], "宋体", 12, False)
             else:
                 new_p = OxmlElement("w:p")
                 new_r = OxmlElement("w:r")
@@ -1636,7 +1704,7 @@ class TemplateRenderer:
                 new_r.append(new_t)
                 new_p.append(new_r)
                 insert_before.addprevious(new_p)
-                _set_paragraph_style_props(new_p, "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(new_p, "宋体", 12, False)
 
         for extra in body_paragraphs[len(new_paragraphs):]:
             extra.getparent().remove(extra)
@@ -1663,7 +1731,7 @@ class TemplateRenderer:
         for pi, paragraph in enumerate(target_paragraphs):
             if pi < len(new_paragraphs):
                 _set_paragraph_text(paragraph, new_paragraphs[pi])
-                _set_paragraph_style_props(paragraph, "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(paragraph, "宋体", 12, False)
             else:
                 paragraph.getparent().remove(paragraph)
 
@@ -1682,7 +1750,7 @@ class TemplateRenderer:
         if att_name:
             p = self._get_paragraph_at(idx)
             _set_paragraph_text(p, f"附件1：{att_name}")
-            _set_paragraph_style_props(p, "汉仪中宋简", 22, True, "left")
+            _set_paragraph_style_props(p, "宋体", 22, True, "left")
 
         attachment2_idx = self._find_anchor_index("附件2", start=idx + 1)
         if attachment2_idx is None:
@@ -1713,13 +1781,15 @@ class TemplateRenderer:
         template_paragraph = target_paragraphs[-1]
         while len(target_paragraphs) < len(desired):
             cloned = copy.deepcopy(template_paragraph)
+            _strip_numPr(cloned)
             insert_before.addprevious(cloned)
             target_paragraphs.append(cloned)
 
         for index, paragraph in enumerate(target_paragraphs):
+            _strip_numPr(paragraph)
             if index < len(desired):
                 _set_paragraph_text(paragraph, desired[index])
-                _set_paragraph_style_props(paragraph, "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(paragraph, "宋体", 12, False)
             else:
                 parent = paragraph.getparent()
                 if parent is not None:
@@ -1739,7 +1809,7 @@ class TemplateRenderer:
         if idx is None:
             return
         heading = self._get_paragraph_at(idx)
-        _set_paragraph_style_props(heading, "汉仪中宋简", 16, True, "center")
+        _set_paragraph_style_props(heading, "宋体", 16, True, "center")
 
         # Replace disclaimer items and right-aligned signature lines.
         item_count = 0
@@ -1755,19 +1825,19 @@ class TemplateRenderer:
             if "服务提供单位" in text:
                 p = self._get_paragraph_at(i)
                 _set_paragraph_text(p, f"服务提供单位:{unit}")
-                _set_paragraph_style_props(p, "汉仪中宋简", 12, False, "right", body_layout=True, first_line_chars=0)
+                _set_paragraph_style_props(p, "宋体", 12, False, "right", body_layout=True, first_line_chars=0)
                 unit_replaced = True
                 continue
             if re.match(r"20\d{2}年", text):
                 p = self._get_paragraph_at(i)
                 _set_paragraph_text(p, date_str)
-                _set_paragraph_style_props(p, "汉仪中宋简", 12, False, "right", body_layout=True, first_line_chars=0)
+                _set_paragraph_style_props(p, "宋体", 12, False, "right", body_layout=True, first_line_chars=0)
                 date_replaced = True
                 continue
             if text.startswith("（") and item_count < len(items):
                 p = self._get_paragraph_at(i)
                 _set_paragraph_text(p, items[item_count])
-                _set_paragraph_style_props(p, "汉仪中宋简", 12, False, "both", body_layout=True, first_line_chars=0)
+                _set_paragraph_style_props(p, "宋体", 12, False, "both", body_layout=True, first_line_chars=0)
                 item_count += 1
 
     def restyle_key_issue_titles(self):
@@ -1780,7 +1850,7 @@ class TemplateRenderer:
             if idx is None:
                 continue
             paragraph = self._get_paragraph_at(idx)
-            _set_paragraph_style_props(paragraph, "汉仪中宋简", 12, True, "left", body_layout=False)
+            _set_paragraph_style_props(paragraph, "宋体", 12, True, "left", body_layout=False)
 
     # ─── Paragraph formatting ───────────────────────────────────────────
     
@@ -1866,9 +1936,9 @@ class TemplateRenderer:
             if rFonts is None:
                 rFonts = OxmlElement("w:rFonts")
                 rPr.append(rFonts)
-            rFonts.set(qn("w:ascii"), "汉仪中宋简")
-            rFonts.set(qn("w:hAnsi"), "汉仪中宋简")
-            rFonts.set(qn("w:eastAsia"), "汉仪中宋简")
+            rFonts.set(qn("w:ascii"), "宋体")
+            rFonts.set(qn("w:hAnsi"), "宋体")
+            rFonts.set(qn("w:eastAsia"), "宋体")
 
     def _apply_red_font_replacements(self):
         """Apply red-font variable replacements across ALL text in the document.
@@ -2022,6 +2092,127 @@ class TemplateRenderer:
         docx_path.unlink()
         tmp_path.rename(docx_path)
 
+    def _key_issue_chart_values(self, values: list) -> list[float]:
+        numeric = [float(value) for value in values]
+        if numeric and sum(numeric) > 1.5:
+            return [value / 100 for value in numeric]
+        return numeric
+
+    def _build_native_chart_xml(self, source_xml: bytes, title: str, categories: list[str], values: list[float]) -> bytes:
+        with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tf:
+            tf.write(source_xml)
+            temp_path = Path(tf.name)
+        try:
+            _update_chart_data(temp_path, categories, values, title)
+            return temp_path.read_bytes()
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    def _build_native_chart_workbook(self, categories: list[str], values: list[float]) -> bytes:
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = "Sheet1"
+        worksheet["A1"] = " "
+        worksheet["B1"] = "占比"
+        for index, (category, value) in enumerate(zip(categories, values), start=2):
+            worksheet.cell(row=index, column=1).value = category
+            value_cell = worksheet.cell(row=index, column=2)
+            value_cell.value = value
+            value_cell.number_format = "0.00%"
+        output = BytesIO()
+        workbook.save(output)
+        return output.getvalue()
+
+    def _add_content_type_override(self, content_types_xml: bytes, part_name: str, content_type: str) -> bytes:
+        ns = {"ct": "http://schemas.openxmlformats.org/package/2006/content-types"}
+        root = ET.fromstring(content_types_xml)
+        for override in root.findall("ct:Override", ns):
+            if override.attrib.get("PartName") == part_name:
+                return content_types_xml
+        override = ET.Element(f"{{{ns['ct']}}}Override")
+        override.set("PartName", part_name)
+        override.set("ContentType", content_type)
+        root.append(override)
+        return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def _add_document_chart_relationships(self, rels_xml: bytes) -> bytes:
+        rel_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
+        chart_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"
+        root = ET.fromstring(rels_xml)
+        existing = {rel.attrib.get("Id") for rel in root}
+        for index in (1, 2):
+            rel_id = f"rIdJlkKeyIssueChart{index}"
+            if rel_id in existing:
+                continue
+            rel = ET.Element(f"{{{rel_ns}}}Relationship")
+            rel.set("Id", rel_id)
+            rel.set("Type", chart_type)
+            rel.set("Target", f"charts/chart{index + 2}.xml")
+            root.append(rel)
+        return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def _build_chart_relationships(self, source_rels: bytes, workbook_name: str) -> bytes:
+        rel_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
+        package_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package"
+        root = ET.fromstring(source_rels)
+        for rel in root:
+            if rel.attrib.get("Type") == package_type:
+                rel.set("Target", f"../embeddings/{workbook_name}")
+        return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def _write_native_key_issue_chart_parts(self, docx_path: Path):
+        key_issue_items = self.payload.get("summary", {}).get("key_issue_items", [])[:2]
+        if not key_issue_items:
+            return
+
+        tmp_path = docx_path.with_suffix(".keycharts.tmp.docx")
+        chart_content_type = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
+        with zipfile.ZipFile(docx_path, "r") as zin:
+            source_chart = zin.read("word/charts/chart1.xml")
+            source_chart_rels = zin.read("word/charts/_rels/chart1.xml.rels")
+            generated: dict[str, bytes] = {
+                "word/_rels/document.xml.rels": self._add_document_chart_relationships(
+                    zin.read("word/_rels/document.xml.rels")
+                ),
+                "[Content_Types].xml": zin.read("[Content_Types].xml"),
+            }
+
+            for index, item in enumerate(key_issue_items, start=1):
+                chart_name = f"word/charts/chart{index + 2}.xml"
+                workbook_name = f"Workbook{index + 3}.xlsx"
+                workbook_path = f"word/embeddings/{workbook_name}"
+                chart_rels_name = f"word/charts/_rels/chart{index + 2}.xml.rels"
+                categories = [str(value) for value in item.get("categories", [])]
+                values = self._key_issue_chart_values(item.get("values", []))
+                generated[chart_name] = self._build_native_chart_xml(
+                    source_chart,
+                    item.get("chart_title", ""),
+                    categories,
+                    values,
+                )
+                generated[workbook_path] = self._build_native_chart_workbook(categories, values)
+                generated[chart_rels_name] = self._build_chart_relationships(source_chart_rels, workbook_name)
+                generated["[Content_Types].xml"] = self._add_content_type_override(
+                    generated["[Content_Types].xml"],
+                    f"/{chart_name}",
+                    chart_content_type,
+                )
+
+            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
+                replaced = set()
+                for item in zin.infolist():
+                    if item.filename in generated:
+                        zout.writestr(item, generated[item.filename])
+                        replaced.add(item.filename)
+                    else:
+                        zout.writestr(item, zin.read(item.filename))
+                for filename, data in generated.items():
+                    if filename not in replaced:
+                        zout.writestr(filename, data)
+
+        docx_path.unlink()
+        tmp_path.rename(docx_path)
+
     def _enable_update_fields_on_open(self, docx_path: Path):
         """Ensure Word refreshes fields such as TOC on document open."""
         tmp_path = docx_path.with_suffix(".settings.tmp.docx")
@@ -2039,6 +2230,43 @@ class TemplateRenderer:
                             root.append(update)
                         update.set(qn("w:val"), "true")
                         data = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+                    zout.writestr(item, data)
+
+        docx_path.unlink()
+        tmp_path.rename(docx_path)
+
+    def _normalize_font_references(self, docx_path: Path):
+        """Normalize document/style/theme font declarations for cross-platform Word rendering."""
+        tmp_path = docx_path.with_suffix(".fonts.tmp.docx")
+        font_names = [
+            "宋体",
+            "黑体",
+            "微软雅黑",
+            "汉仪中宋简",
+            "Times New Roman",
+            "Arial",
+            "Calibri",
+            "SimSun",
+            "SimHei",
+        ]
+
+        with zipfile.ZipFile(docx_path, "r") as zin:
+            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    data = zin.read(item.filename)
+                    if item.filename.endswith(".xml"):
+                        text = data.decode("utf-8", errors="replace")
+                        if item.filename.startswith("word/"):
+                            for name in font_names:
+                                text = text.replace(name, DEFAULT_FONT)
+                            text = re.sub(
+                                r'w:(ascii|hAnsi|eastAsia|cs)(Theme)?="[^"]*"',
+                                lambda match: f'w:{match.group(1)}="{DEFAULT_FONT}"',
+                                text,
+                            )
+                            if item.filename == "word/theme/theme1.xml":
+                                text = re.sub(r'typeface="[^"]*"', f'typeface="{DEFAULT_FONT}"', text)
+                        data = text.encode("utf-8")
                     zout.writestr(item, data)
 
         docx_path.unlink()
@@ -2095,10 +2323,11 @@ class TemplateRenderer:
 
         # Phase 2: Global XML-level text cleanup (catch anything missed)
         self._global_replace_in_xml(output_path)
+        self._write_native_key_issue_chart_parts(output_path)
 
-        # Phase 3: Enable field updates on open. Charts are rendered as PNG
-        # images in the document body to avoid platform-specific Office chart drift.
+        # Phase 3: Enable field updates on open and normalize final XML.
         self._enable_update_fields_on_open(output_path)
+        self._normalize_font_references(output_path)
 
         return output_path
 

@@ -119,9 +119,11 @@ def main() -> None:
     try:
         validate_docx(output_docx, payload)
     except FinalValidationError as exc:
-        print(f"FINAL_VALIDATION_WARNING: {exc}", file=sys.stderr)
+        if output_docx.exists():
+            output_docx.unlink()
+        print(f"FINAL_VALIDATION_FAILED: {exc}", file=sys.stderr)
         print(f"Run diagnostics retained at: {run_dir.resolve()}", file=sys.stderr)
-        # Keep output for debugging
+        raise SystemExit(1) from exc
 
     print(output_docx.resolve())
 
