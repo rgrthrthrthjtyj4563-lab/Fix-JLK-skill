@@ -45,6 +45,13 @@ def _find_text_index(texts: list[str], target: str, start: int = 0) -> int:
             return index
     raise FinalValidationError(f"Missing required paragraph: {target}")
 
+
+def _find_text_prefix_index(texts: list[str], prefix: str, start: int = 0) -> int:
+    for index in range(start, len(texts)):
+        if texts[index].startswith(prefix):
+            return index
+    raise FinalValidationError(f"Missing required paragraph prefix: {prefix}")
+
 def _section_heading_text(section: dict) -> str:
     return f"{section.get('section_number', '').strip()} {section.get('section_title', '').strip()}".strip()
 
@@ -368,6 +375,31 @@ def _validate_key_issue_text(texts: list[str], payload: dict) -> None:
             raise FinalValidationError("5.1 contains numbered issue title paragraphs.")
 
 
+def _normalize_paragraphs(paragraphs: list[str]) -> list[str]:
+    return [_clean_text(paragraph) for paragraph in paragraphs if str(paragraph).strip()]
+
+
+def _validate_ai_summary_text(texts: list[str], payload: dict) -> None:
+    overall_start = _find_text_index(texts, "5.2调研结果总结")
+    rec_start = _find_text_index(texts, "5.3建议", overall_start + 1)
+    attachment_start = _find_text_prefix_index(texts, "附件1", rec_start + 1)
+
+    actual_overall = texts[overall_start + 1:rec_start]
+    expected_overall = [str(item).strip() for item in payload.get("summary", {}).get("overall_analysis", []) if str(item).strip()]
+    if _normalize_paragraphs(actual_overall) != _normalize_paragraphs(expected_overall):
+        raise FinalValidationError("5.2 summary text does not match AI payload paragraphs.")
+
+    actual_recommendations = texts[rec_start + 1:attachment_start]
+    expected_recommendations = [str(item).strip() for item in payload.get("summary", {}).get("recommendations", []) if str(item).strip()]
+    if _normalize_paragraphs(actual_recommendations) != _normalize_paragraphs(expected_recommendations):
+        raise FinalValidationError("5.3 recommendations text does not match AI payload paragraphs.")
+
+    joined_recommendations = "\n".join(actual_recommendations)
+    for forbidden in ["药企方面", "临床层面：", "临床层面:"]:
+        if forbidden in joined_recommendations:
+            raise FinalValidationError("5.3 contains old template recommendation wording.")
+
+
 def _validate_font_xml(docx_path: Path) -> None:
     ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
     with ZipFile(docx_path) as zipped:
@@ -426,6 +458,7 @@ def validate_docx(docx_path: Path, payload: dict) -> None:
     _validate_result_tables(doc, payload)
     _validate_result_table_blocks(docx_path, payload)
     _validate_key_issue_text(texts, payload)
+    _validate_ai_summary_text(texts, payload)
     _validate_attachment1(texts, payload)
     _validate_subtopic_numbering_xml(docx_path)
     _validate_png_chart_layout(docx_path, payload)

@@ -533,6 +533,14 @@ class TemplateRenderer:
                 return i
         return None
 
+    def _find_paragraph_prefix_index(self, text_prefix: str, start: int = 0) -> Optional[int]:
+        for i, info in self.anchors.items():
+            if i < start:
+                continue
+            if info["type"] == "p" and info["text"].strip().startswith(text_prefix):
+                return i
+        return None
+
     def _get_paragraph_at(self, idx: int):
         """Get w:p element at body index."""
         child = self.body[idx]
@@ -1301,6 +1309,8 @@ class TemplateRenderer:
                 "5.3建议",
                 "附件1",
                 recommendations,
+                end_heading_prefix=True,
+                fail_if_missing=True,
             )
 
     def _ensure_summary_headings(self):
@@ -1594,11 +1604,23 @@ class TemplateRenderer:
 
         self._rebuild_anchors()
 
-    def _replace_section_body_by_heading(self, start_heading: str, end_heading: str, new_paragraphs: list[str]):
+    def _replace_section_body_by_heading(
+        self,
+        start_heading: str,
+        end_heading: str,
+        new_paragraphs: list[str],
+        end_heading_prefix: bool = False,
+        fail_if_missing: bool = False,
+    ):
         """Replace paragraph content between two exact heading paragraphs."""
         start_idx = self._find_exact_paragraph_index(start_heading)
-        end_idx = self._find_exact_paragraph_index(end_heading, start=(start_idx + 1) if start_idx is not None else 0)
+        if end_heading_prefix:
+            end_idx = self._find_paragraph_prefix_index(end_heading, start=(start_idx + 1) if start_idx is not None else 0)
+        else:
+            end_idx = self._find_exact_paragraph_index(end_heading, start=(start_idx + 1) if start_idx is not None else 0)
         if start_idx is None or end_idx is None or end_idx <= start_idx:
+            if fail_if_missing:
+                raise ValueError(f"Cannot replace section body from '{start_heading}' to '{end_heading}'.")
             return
 
         body_paragraphs = []

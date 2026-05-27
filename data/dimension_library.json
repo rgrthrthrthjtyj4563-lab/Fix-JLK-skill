@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "themes": [
+    {
+      "theme_name": "心达康胶囊的患者依从性调研问卷",
+      "dimensions": [
+        {
+          "name": "受访者基础特征与用药认知信息获取",
+          "subtopics": [
+            {"question_numbers": [1], "subtitle": "受访者教育程度分析"},
+            {"question_numbers": [7], "subtitle": "用药信息获取渠道分析"},
+            {"question_numbers": [9], "subtitle": "药品储存方法认知渠道分析"}
+          ]
+        },
+        {
+          "name": "日常用药行为与服药习惯",
+          "subtopics": [
+            {"question_numbers": [2], "subtitle": "服药时间分布分析"},
+            {"question_numbers": [3], "subtitle": "每日服药频次分析"},
+            {"question_numbers": [4], "subtitle": "漏服后处置行为分析"}
+          ]
+        },
+        {
+          "name": "漏服原因、自行调量与用药依从性",
+          "subtopics": [
+            {"question_numbers": [5], "subtitle": "漏服主要原因分析（多选）"},
+            {"question_numbers": [6], "subtitle": "自行调整剂量行为分析"}
+          ]
+        },
+        {
+          "name": "不良反应处置与健康教育提升需求",
+          "subtopics": [
+            {"question_numbers": [8], "subtitle": "依从性改进诉求分析（多选）"},
+            {"question_numbers": [10], "subtitle": "不良反应应对方式分析（多选）"}
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "心达康胶囊-药品可及性与价格敏感度调查（患者）",
+      "dimensions": [
+        {
+          "name": "受访者基础特征与用药认知信息获取",
+          "subtopics": [
+            {"question_numbers": [1], "subtitle": "受访者基础特征维度"}
+          ]
+        },
+        {
+          "name": "药品可及性与获取行为维度",
+          "subtopics": [
+            {"question_numbers": [2], "subtitle": "药品获取渠道分析"},
+            {"question_numbers": [3], "subtitle": "药品缺货情况分析"},
+            {"question_numbers": [10], "subtitle": "药品可及性提升途径分析"}
+          ]
+        },
+        {
+          "name": "药品价格敏感度与支付行为维度",
+          "subtopics": [
+            {"question_numbers": [4], "subtitle": "药品支付方式分析"},
+            {"question_numbers": [5], "subtitle": "药品价格评价分析"},
+            {"question_numbers": [6], "subtitle": "价格变动对购买决策的影响分析"},
+            {"question_numbers": [7], "subtitle": "长期用药价格方案偏好分析"}
+          ]
+        },
+        {
+          "name": "药品可及性与价格优化诉求维度",
+          "subtopics": [
+            {"question_numbers": [8], "subtitle": "可及性与可负担性提升方式分析"},
+            {"question_numbers": [9], "subtitle": "价格敏感度改善建议分析"}
+          ]
+        }
+      ]
+    }
+  ]
+}

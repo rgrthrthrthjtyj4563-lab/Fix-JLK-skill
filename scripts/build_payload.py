@@ -14,6 +14,142 @@ except ImportError:
     from cluster_dimensions import cluster_dimensions
     from expression_data import is_complete_analysis
 
+# ─── Fixed dimension library ──────────────────────────────────────────────
+_DIMENSION_LIBRARY_CACHE: dict | None = None
+
+
+def _dimension_library_path() -> Path:
+    """Return the path to data/dimension_library.json relative to this file."""
+    return Path(__file__).resolve().parent.parent / "data" / "dimension_library.json"
+
+
+def load_dimension_library() -> dict | None:
+    """Load and cache the fixed dimension library JSON.
+
+    Returns the parsed dict on success, None if the file does not exist.
+    """
+    global _DIMENSION_LIBRARY_CACHE
+    if _DIMENSION_LIBRARY_CACHE is not None:
+        return _DIMENSION_LIBRARY_CACHE
+    lib_path = _dimension_library_path()
+    if not lib_path.exists():
+        return None
+    with open(lib_path, encoding="utf-8") as f:
+        _DIMENSION_LIBRARY_CACHE = json.load(f)
+    return _DIMENSION_LIBRARY_CACHE
+
+
+def resolve_theme(questionnaire: dict, meta: dict, cli_args: argparse.Namespace, library: dict) -> dict | None:
+    """Find a matching theme entry from the dimension library.
+
+    Matching strategy (first wins):
+      1. cli_args.theme  exact match on theme_name
+      2. meta["theme"] / meta["\u4e3b\u9898"]  exact match on theme_name
+      3. None \u2192 caller falls back to AI / hardcoded logic
+    """
+    theme_input = (
+        getattr(cli_args, "theme", None)
+        or meta.get("theme")
+        or meta.get("\u4e3b\u9898")
+    )
+    if not theme_input:
+        return None
+    theme_input = normalize_space(theme_input)
+    for entry in library.get("themes", []):
+        if normalize_space(entry.get("theme_name", "")) == theme_input:
+            return entry
+    return None
+
+
+def _chart_rule_for_subtopic(
+    dim_idx: int, st_idx: int, total_subtopics: int
+) -> dict:
+    """Derive a default chart spec for a subtopic.
+
+    Rules (matching the hardcoded templates):
+      - First subtopic of first dimension → pie + efficacy_pie
+      - First subtopic of second dimension → bar3d + behavior_bar
+      - Otherwise no chart
+    """
+    if dim_idx == 0 and st_idx == 0:
+        return {"chart_type": "pie", "chart_style_profile": "efficacy_pie"}
+    if dim_idx == 1 and st_idx == 0:
+        return {"chart_type": "bar3d", "chart_style_profile": "behavior_bar"}
+    return {}
+
+
+def _unique_pattern_for_question(q_text: str) -> str:
+    """Extract a unique regex pattern from a question text.
+
+    Strategy: use the FULL question text (regex-escaped) as the pattern
+    so each question matches ONLY its own subtopic in
+    _build_from_ai_dimensions. This prevents keyword-overlap issues
+    where generic keywords like "心达康" match multiple questions.
+    """
+    if not q_text:
+        return r"\x00NEVER_MATCH"
+    # Escape regex special chars, then use full text as pattern
+    return re.escape(q_text.strip())
+
+
+def fixed_dimensions_to_ai(theme_entry: dict, questionnaire: dict) -> dict:
+    """Convert a fixed-theme entry into the ai_dimensions format that
+    cluster_dimensions._build_from_ai_dimensions() consumes.
+
+    Strategy: for each subtopic, build ONE pattern per question_number
+    using the full question text (regex-escaped). This guarantees that
+    _build_from_ai_dimensions matches each question to exactly the
+    subtopic it belongs to, regardless of keyword overlap across
+    different dimensions.
+    """
+    all_questions = questionnaire.get("questions", [])
+    if not all_questions:
+        return {"dimensions": []}
+
+    # Build a number->question lookup
+    q_by_num = {q.get("number"): q for q in all_questions}
+
+    dimensions_out = []
+    for dim_idx, dim in enumerate(theme_entry.get("dimensions", [])):
+        subtopics_out = []
+        charts_out = []
+        for st_idx, sub in enumerate(dim.get("subtopics", [])):
+            q_nums = sub.get("question_numbers", [])
+            subtitle = sub.get("subtitle", "")
+            patterns: list[str] = []
+
+            for qn in q_nums:
+                q_obj = q_by_num.get(qn)
+                if q_obj and q_obj.get("question"):
+                    # Use full question text as regex-escaped pattern
+                    # so this question matches ONLY this subtopic
+                    patterns.append(_unique_pattern_for_question(str(q_obj["question"])))
+
+            # Fallback: if no question found, use never-match pattern
+            if not patterns and q_nums:
+                patterns = [r"\x00NEVER_MATCH"]
+
+            subtopics_out.append({
+                "patterns": patterns,
+                "subtitle": subtitle,
+            })
+
+            # Chart specs from rules
+            chart_rule = _chart_rule_for_subtopic(dim_idx, st_idx, len(dim.get("subtopics", [])))
+            if chart_rule:
+                charts_out.append({
+                    "patterns": patterns[:1] if patterns else [],
+                    **chart_rule,
+                })
+
+        dimensions_out.append({
+            "name": dim.get("name", ""),
+            "intro": "",
+            "subtopics": subtopics_out,
+            "charts": charts_out,
+        })
+
+    return {"dimensions": dimensions_out}
 
 def normalize_space(text: str) -> str:
     return re.sub(r"[ \t\u3000]+", " ", str(text).strip())
@@ -46,6 +182,13 @@ def split_front_matter(text: str) -> tuple[dict, str]:
 
 DIMENSIONS_JSON_CHART_TYPES = {"pie", "bar", "bar3d"}
 DIMENSIONS_JSON_CHART_STYLES = {"efficacy_pie", "safety_pie", "behavior_bar"}
+MIN_KEY_ISSUE_CHARS = 250
+MAX_KEY_ISSUE_CHARS = 350
+FORBIDDEN_KEY_ISSUE_PATTERNS = [
+    r"呈现出较明确的反馈集中趋势",
+    r"该环节已经成为影响",
+    r"更适合作为后续患者教育和随访沟通的重点切入点",
+]
 
 
 def _require_text(value: object, field: str) -> str:
@@ -330,6 +473,37 @@ def _valid_sample_value(value: object) -> str:
         return text
 
 
+def _sample_int(value: object) -> int | None:
+    normalized = _valid_sample_value(value)
+    if not normalized:
+        return None
+    try:
+        number = float(normalized)
+    except Exception:
+        return None
+    if number <= 0:
+        return None
+    return int(number)
+
+
+def build_settlement(sample_size: object) -> dict:
+    sample_count = _sample_int(sample_size) or 0
+    sample_unit_price = 100
+    report_unit_price = 30000
+    report_count = 1
+    sample_amount = sample_count * sample_unit_price
+    report_amount = report_unit_price * report_count
+    return {
+        "sample_unit_price": sample_unit_price,
+        "sample_count": sample_count,
+        "sample_amount": sample_amount,
+        "report_unit_price": report_unit_price,
+        "report_count": report_count,
+        "report_amount": report_amount,
+        "total_amount": sample_amount + report_amount,
+    }
+
+
 def _option_count_total(question: dict) -> str:
     counts = []
     for option in question.get("options", []):
@@ -481,7 +655,10 @@ def build_questionnaire_note(question_count: int) -> dict:
     return {"intro": intro, "items": items, "closing": closing}
 
 
-def derive_report_title(product: str, grouped: dict) -> str:
+def derive_report_title(theme: str | None = None) -> str:
+    theme_text = normalize_space(theme or "")
+    if theme_text:
+        return f"{theme_text}问卷调研分析报告"
     return "问卷调研分析报告"
 
 
@@ -701,6 +878,86 @@ def _parse_key_issue_sections(meta: dict, valid_numbers: set[str]) -> list[str] 
     return validated[:2]
 
 
+def _parse_key_issue_question_refs(meta: dict, qmap: dict, result_sections: list[dict]) -> list[str]:
+    raw = meta.get("key_issue_question_refs") if meta else None
+    if not raw:
+        raise ValueError("key_issue_question_refs is required and must contain exactly 2 question refs.")
+
+    if isinstance(raw, list):
+        candidates = [str(item).strip() for item in raw]
+    elif isinstance(raw, str):
+        stripped = raw.strip()
+        if stripped.startswith("["):
+            try:
+                candidates = json.loads(stripped)
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise ValueError(f"Invalid JSON in key_issue_question_refs: {raw}") from exc
+        else:
+            candidates = [item.strip() for item in stripped.split(",") if item.strip()]
+    else:
+        raise ValueError(f"Unsupported key_issue_question_refs type: {type(raw).__name__}")
+
+    normalized = []
+    for candidate in candidates:
+        text = str(candidate).strip()
+        if re.fullmatch(r"\d+", text):
+            text = f"q{int(text):02d}"
+        elif re.fullmatch(r"[qQ]\d+", text):
+            text = f"q{int(text[1:]):02d}"
+        normalized.append(text)
+
+    if len(normalized) != 2 or len(set(normalized)) != 2:
+        raise ValueError("key_issue_question_refs must contain exactly 2 unique question refs.")
+
+    assigned_refs = {
+        ref
+        for section in result_sections
+        for subtopic in section.get("subtopics", [])
+        for ref in subtopic.get("question_refs", [])
+    }
+    for ref in normalized:
+        if ref not in qmap:
+            raise ValueError(f"key_issue_question_refs contains unknown question ref '{ref}'.")
+        if ref not in assigned_refs:
+            raise ValueError(f"key_issue_question_refs contains question ref '{ref}' outside result-analysis sections.")
+    return normalized
+
+
+def select_key_issue_questions_by_refs(question_refs: list[str], qmap: dict) -> list[dict]:
+    return [
+        {
+            "question_ref": ref,
+            "heading": key_issue_heading(qmap[ref]),
+            "chart_title": key_issue_chart_title(qmap[ref]),
+            "question": qmap[ref],
+        }
+        for ref in question_refs
+    ]
+
+
+def choose_key_issue_analysis(ai_paragraphs: list[str], expected_count: int) -> list[str]:
+    paragraphs = sanitize_body_paragraphs(ai_paragraphs)
+    if expected_count <= 0:
+        return []
+    if len(paragraphs) != expected_count:
+        raise ValueError(
+            f"5.1问卷重点问题分析 must contain exactly {expected_count} AI paragraphs."
+        )
+    for index, paragraph in enumerate(paragraphs, start=1):
+        length = len(paragraph)
+        if length < MIN_KEY_ISSUE_CHARS or length > MAX_KEY_ISSUE_CHARS:
+            raise ValueError(
+                f"5.1问卷重点问题分析 paragraph {index} length must be "
+                f"{MIN_KEY_ISSUE_CHARS}-{MAX_KEY_ISSUE_CHARS} Chinese characters."
+            )
+        if not any(marker in paragraph for marker in ["说明", "表明", "反映", "提示", "判断"]):
+            raise ValueError(f"5.1问卷重点问题分析 paragraph {index} lacks analytical judgment.")
+        for pattern in FORBIDDEN_KEY_ISSUE_PATTERNS:
+            if re.search(pattern, paragraph):
+                raise ValueError(f"5.1问卷重点问题分析 paragraph {index} contains fixed programmatic wording.")
+    return paragraphs
+
+
 def validate_content_structure(content: dict, grouped: dict) -> None:
     expected_sections = grouped.get("sections", [])
     expected_by_number = {section["section_number"]: section for section in expected_sections}
@@ -823,16 +1080,79 @@ def build_programmatic_overall_analysis(
         return [normalize_space(opening), normalize_space(closing)]
 
 
-def choose_overall_analysis(ai_paragraphs: list[str], fallback: list[str]) -> list[str]:
+def choose_overall_analysis(
+    ai_paragraphs: list[str],
+    programmatic_reference: list[str],
+    product: str,
+    region: str,
+) -> list[str]:
     normalized = choose_body_paragraphs(ai_paragraphs, [])
     total_len = sum(len(paragraph) for paragraph in normalized)
-    if len(normalized) >= 4 and total_len <= 700:
-        return normalized
-    return fallback
+    if not normalized:
+        raise ValueError("5.2调研结果总结 must be provided by AI draft.")
+    if normalized == choose_body_paragraphs(programmatic_reference, []):
+        raise ValueError("5.2调研结果总结 must not use programmatic fallback text.")
+    if not (3 <= len(normalized) <= 5):
+        raise ValueError("5.2调研结果总结 must contain 3-5 AI paragraphs.")
+    if total_len > 700:
+        raise ValueError("5.2调研结果总结 must not exceed 700 Chinese characters.")
+    joined = "".join(normalized)
+    if product and product not in joined and region and region not in joined:
+        raise ValueError("5.2调研结果总结 must mention the product or region.")
+    if not any(marker in joined for marker in ["说明", "表明", "反映", "提示", "判断"]):
+        raise ValueError("5.2调研结果总结 lacks analytical judgment.")
+    return normalized
+
+
+def choose_recommendations(ai_paragraphs: list[str], fallback: list[str]) -> list[str]:
+    normalized = choose_body_paragraphs(ai_paragraphs, [])
+    if not normalized:
+        raise ValueError("5.3建议 must be provided by AI draft.")
+    if normalized == choose_body_paragraphs(fallback, []):
+        raise ValueError("5.3建议 must not use programmatic fallback text.")
+    if any("药企方面" in paragraph or "临床层面：" in paragraph or "临床层面:" in paragraph for paragraph in normalized):
+        raise ValueError("5.3建议 contains forbidden template subject wording.")
+
+    total_len = sum(len(paragraph) for paragraph in normalized)
+    numbered_items = [paragraph for paragraph in normalized if re.match(r"^\d+\.\s*\S+", paragraph)]
+    has_intro = bool(normalized and normalized[0] not in numbered_items)
+    intro_valid = not has_intro or (
+        40 <= len(normalized[0]) <= 120
+        and any(keyword in normalized[0] for keyword in ("基于", "结合"))
+        and "建议" in normalized[0]
+    )
+    target_keywords = ("针对", "围绕", "聚焦", "面向", "建议")
+    carrier_keywords = (
+        "提醒卡", "药盒", "二维码", "随访表", "患者手册", "记录表", "短视频", "沟通群",
+        "宣传册", "流程单", "闹钟", "药师", "门诊", "药店", "台账", "贴",
+    )
+    item_lengths_valid = all(80 <= len(item) <= 180 for item in numbered_items)
+    item_targets_valid = all(any(keyword in item for keyword in target_keywords) for item in numbered_items)
+    item_carriers_valid = all(any(keyword in item for keyword in carrier_keywords) for item in numbered_items)
+
+    if not intro_valid:
+        raise ValueError("5.3建议 intro is invalid.")
+    if not (2 <= len(numbered_items) <= 4):
+        raise ValueError("5.3建议 must contain 2-4 numbered recommendation items.")
+    if not (300 <= total_len <= 600):
+        raise ValueError("5.3建议 total length must be 300-600 Chinese characters.")
+    if not item_lengths_valid:
+        raise ValueError("5.3建议 numbered items must be 80-180 Chinese characters each.")
+    if not item_targets_valid:
+        raise ValueError("5.3建议 numbered items must describe target problems or groups.")
+    if not item_carriers_valid:
+        raise ValueError("5.3建议 numbered items must include concrete tools or carriers.")
+    return normalized
 
 
 def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argparse.Namespace) -> dict:
-    ai_dimensions = parse_dimensions_from_meta(meta) if meta else None
+    # Fixed dimension library takes priority when a theme matches
+    library = load_dimension_library()
+    theme_entry = resolve_theme(questionnaire, meta if meta else {}, cli_args, library) if library else None
+    if theme_entry:
+        ai_dimensions = fixed_dimensions_to_ai(theme_entry, questionnaire)
+    else:
+        ai_dimensions = parse_dimensions_from_meta(meta) if meta else None
     grouped = cluster_dimensions(questionnaire, ai_dimensions=ai_dimensions)
     validate_content_structure(content, grouped)
     attachment_questions = build_attachment_questions(questionnaire)
@@ -845,7 +1165,8 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
     product = cli_args.product or meta.get("product") or meta.get("品种")
     region = cli_args.region or meta.get("region") or meta.get("地区")
     question_count = questionnaire.get("question_count", len(questionnaire.get("questions", [])))
-    report_title = derive_report_title(product, grouped)
+    theme = getattr(cli_args, "theme", None) or meta.get("theme") or meta.get("主题")
+    report_title = derive_report_title(theme)
 
     ai_sections = content.get("result_analysis", [])
     ai_by_sn = {}
@@ -920,26 +1241,30 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "subtopics": subtopics,
         })
 
-    existing_numbers = {sec["section_number"] for sec in result_sections}
-    ai_key_issue = _parse_key_issue_sections(meta, existing_numbers)
-    preferred = ai_key_issue if ai_key_issue is not None else grouped.get("key_issue_preferred_sections", [])
-    key_issue_questions = select_key_issue_questions(
-        result_sections,
-        qmap,
-        preferred,
-    )
+    key_issue_question_refs = _parse_key_issue_question_refs(meta, qmap, result_sections)
+    key_issue_questions = select_key_issue_questions_by_refs(key_issue_question_refs, qmap)
     key_issue_items = [
         {
             "question_ref": item["question_ref"],
             "heading": item["heading"],
             "chart_title": item["chart_title"],
             "chart_type": "pie",
-            "paragraph": build_key_issue_paragraph(item["question"], region, product),
+            "paragraph": "",
             "categories": [opt.get("text", "") for opt in item["question"].get("options", [])],
             "values": [float(str(opt.get("pct", "0")).rstrip("%") or 0) for opt in item["question"].get("options", [])],
         }
         for item in key_issue_questions
     ]
+    programmatic_key_issue_analysis = [
+        build_key_issue_paragraph(qmap[item["question_ref"]], region, product)
+        for item in key_issue_items
+    ]
+    ai_key_issue_analysis = choose_key_issue_analysis(
+        content["summary"]["key_issue_analysis"],
+        len(key_issue_items),
+    )
+    for item, paragraph in zip(key_issue_items, ai_key_issue_analysis):
+        item["paragraph"] = paragraph
 
     programmatic_overall_analysis = build_programmatic_overall_analysis(
         result_sections,
@@ -947,6 +1272,17 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
         region,
         product,
         str(sample_size) if sample_size else None,
+    )
+    ai_overall_analysis = choose_overall_analysis(
+        content["summary"]["overall_analysis"],
+        programmatic_overall_analysis,
+        product,
+        region,
+    )
+    programmatic_recommendations = build_programmatic_recommendations(product, region)
+    ai_recommendations = choose_recommendations(
+        content["summary"]["recommendations"],
+        programmatic_recommendations,
     )
     overview_categories = [section.get("section_title", "") for section in result_sections]
     overview_values = [len(section.get("subtopics", [])) for section in result_sections]
@@ -993,6 +1329,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
         "service": {
             "unit": cli_args.disclaimer_unit or meta.get("disclaimer_unit") or "北京玖麟空科技有限公司",
             "date": derive_service_date(survey_period),
+            "settlement": build_settlement(sample_size),
         },
         "preface": choose_two_paragraphs(content["preface"], derive_preface(product, region, str(sample_size) if sample_size else "")),
         "project_background": choose_two_paragraphs(content["project_background"], derive_project_background(product, region)),
@@ -1010,20 +1347,13 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "sections": result_sections,
         },
         "summary": {
-            "key_issue_analysis": [
-                value
-                for item in key_issue_items
-                for value in [item["heading"], item["paragraph"]]
-            ],
-            "key_issue_analysis_programmatic": [
-                value
-                for item in key_issue_items
-                for value in [item["heading"], item["paragraph"]]
-            ],
+            "key_issue_analysis": ai_key_issue_analysis,
+            "key_issue_analysis_programmatic": programmatic_key_issue_analysis,
             "key_issue_items": key_issue_items,
-            "overall_analysis": choose_overall_analysis(content["summary"]["overall_analysis"], programmatic_overall_analysis),
+            "overall_analysis": ai_overall_analysis,
             "overall_analysis_programmatic": programmatic_overall_analysis,
-            "recommendations": build_programmatic_recommendations(product, region),
+            "recommendations": ai_recommendations,
+            "recommendations_programmatic": programmatic_recommendations,
         },
         "attachments": {
             "attachment1_name": cli_args.attachment_name or meta.get("attachment_name") or "问卷调查附件",
@@ -1075,6 +1405,39 @@ def validate_payload(payload: dict) -> None:
     for section in payload["result_analysis"]["sections"]:
         if not section["subtopics"]:
             raise ValueError(f"Section {section['section_number']}{section['section_title']} must contain subtopics.")
+    key_issue_items = payload.get("summary", {}).get("key_issue_items", [])
+    key_issue_analysis = payload.get("summary", {}).get("key_issue_analysis", [])
+    if len(key_issue_items) != 2:
+        raise ValueError("5.1 key_issue_question_refs must resolve to exactly 2 key issue items.")
+    choose_key_issue_analysis(key_issue_analysis, len(key_issue_items))
+    for item, paragraph in zip(key_issue_items, key_issue_analysis):
+        if item.get("paragraph") != paragraph:
+            raise ValueError("5.1 key issue item paragraph must match AI key issue analysis.")
+    overall_analysis = payload.get("summary", {}).get("overall_analysis", [])
+    choose_overall_analysis(
+        overall_analysis,
+        payload.get("summary", {}).get("overall_analysis_programmatic", []),
+        payload.get("meta", {}).get("product", ""),
+        payload.get("meta", {}).get("region", ""),
+    )
+    recommendations = payload.get("summary", {}).get("recommendations", [])
+    choose_recommendations(
+        recommendations,
+        payload.get("summary", {}).get("recommendations_programmatic", build_programmatic_recommendations(
+            payload.get("meta", {}).get("product", ""),
+            payload.get("meta", {}).get("region", ""),
+        )),
+    )
+    settlement = payload.get("service", {}).get("settlement", {})
+    if settlement:
+        expected_sample_amount = int(settlement.get("sample_count", 0)) * int(settlement.get("sample_unit_price", 0))
+        expected_report_amount = int(settlement.get("report_count", 0)) * int(settlement.get("report_unit_price", 0))
+        if int(settlement.get("sample_amount", -1)) != expected_sample_amount:
+            raise ValueError("Settlement sample amount is incorrect.")
+        if int(settlement.get("report_amount", -1)) != expected_report_amount:
+            raise ValueError("Settlement report amount is incorrect.")
+        if int(settlement.get("total_amount", -1)) != expected_sample_amount + expected_report_amount:
+            raise ValueError("Settlement total amount is incorrect.")
 
 
 def main() -> None:
@@ -1085,6 +1448,7 @@ def main() -> None:
     parser.add_argument("--product")
     parser.add_argument("--region")
     parser.add_argument("--time")
+    parser.add_argument("--theme")
     parser.add_argument("--attachment-name")
     parser.add_argument("--survey-period")
     parser.add_argument("--sample-size")
