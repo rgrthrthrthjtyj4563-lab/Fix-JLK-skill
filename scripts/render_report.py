@@ -20,7 +20,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
-SONGTI = "汉仪中宋简"
+SONGTI = "宋体"
 BLACK = RGBColor(0x00, 0x00, 0x00)
 HEADER_BLUE = "4684D3"
 LIGHT_BLUE = "D5E4F5"
@@ -340,7 +340,7 @@ def render_report(payload: dict, output_docx: Path) -> Path:
     add_heading(doc, "5.1问卷重点问题分析", 2)
     for paragraph in payload["summary"]["key_issue_analysis"]:
         add_body(doc, paragraph)
-    add_heading(doc, "5.2调研结果分析", 2)
+    add_heading(doc, "5.2调研结果总结", 2)
     for paragraph in payload["summary"]["overall_analysis"]:
         add_body(doc, paragraph)
     add_heading(doc, "5.3建议", 2)

@@ -1061,7 +1061,7 @@ class PipelineTest(unittest.TestCase):
             key_issue_drawings = [i for i in drawing_indices if key_issue_heading_idx < i < key_issue_end_idx]
             self.assertEqual(len(result_drawings), 2)
             self.assertEqual(len(key_issue_drawings), 2)
-            key_issue_chart_refs = chart_refs_between(output_docx, "5.1问卷重点问题分析", "5.2调研结果分析")
+            key_issue_chart_refs = chart_refs_between(output_docx, "5.1问卷重点问题分析", "5.2调研结果总结")
             self.assertEqual(key_issue_chart_refs, ["charts/chart3.xml", "charts/chart4.xml"])
             self.assertEqual([chart_part_type(output_docx, ref) for ref in key_issue_chart_refs], ["pie3DChart", "pie3DChart"])
 

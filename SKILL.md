@@ -90,8 +90,7 @@ description: "Use when generating patient questionnaire analysis reports for pha
 ## Supported Templates
 - `用药体验与疗效反馈`（内置硬编码回退）
 - `依从性与用药习惯`（内置硬编码回退）
-- `心达康胶囊的患者依从性调研问卷`（固定维度表 `data/dimension_library.json`）
-- `心达康胶囊-药品可及性与价格敏感度调查（患者）`（固定维度表 `data/dimension_library.json`）
+- `data/dimension_library.json` 固定维度表中的主题（当前覆盖心达康胶囊、奥扎格雷氨丁三醇注射用浓溶液、补中益气口服液、厄贝沙坦氢氯噻嗪片等患者问卷主题）
 - 任意新品种：通过 `report_content.md` front matter 中的 `dimensions_json` 字段动态声明维度，无需硬编码
 - 新增固定维度主题：编辑 `data/dimension_library.json`，在 `themes` 数组中添加条目即可，无需改代码
 

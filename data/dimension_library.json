@@ -7,31 +7,81 @@
         {
           "name": "受访者基础特征与用药认知信息获取",
           "subtopics": [
-            {"question_numbers": [1], "subtitle": "受访者教育程度分析"},
-            {"question_numbers": [7], "subtitle": "用药信息获取渠道分析"},
-            {"question_numbers": [9], "subtitle": "药品储存方法认知渠道分析"}
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "受访者教育程度分析"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "用药信息获取渠道分析"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "药品储存方法认知渠道分析"
+            }
           ]
         },
         {
           "name": "日常用药行为与服药习惯",
           "subtopics": [
-            {"question_numbers": [2], "subtitle": "服药时间分布分析"},
-            {"question_numbers": [3], "subtitle": "每日服药频次分析"},
-            {"question_numbers": [4], "subtitle": "漏服后处置行为分析"}
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "服药时间分布分析"
+            },
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "每日服药频次分析"
+            },
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "漏服后处置行为分析"
+            }
           ]
         },
         {
           "name": "漏服原因、自行调量与用药依从性",
           "subtopics": [
-            {"question_numbers": [5], "subtitle": "漏服主要原因分析（多选）"},
-            {"question_numbers": [6], "subtitle": "自行调整剂量行为分析"}
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "漏服主要原因分析（多选）"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "自行调整剂量行为分析"
+            }
           ]
         },
         {
           "name": "不良反应处置与健康教育提升需求",
           "subtopics": [
-            {"question_numbers": [8], "subtitle": "依从性改进诉求分析（多选）"},
-            {"question_numbers": [10], "subtitle": "不良反应应对方式分析（多选）"}
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "依从性改进诉求分析（多选）"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "不良反应应对方式分析（多选）"
+            }
           ]
         }
       ]
@@ -42,31 +92,1581 @@
         {
           "name": "受访者基础特征与用药认知信息获取",
           "subtopics": [
-            {"question_numbers": [1], "subtitle": "受访者基础特征维度"}
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "受访者基础特征维度"
+            }
           ]
         },
         {
           "name": "药品可及性与获取行为维度",
           "subtopics": [
-            {"question_numbers": [2], "subtitle": "药品获取渠道分析"},
-            {"question_numbers": [3], "subtitle": "药品缺货情况分析"},
-            {"question_numbers": [10], "subtitle": "药品可及性提升途径分析"}
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "药品获取渠道分析"
+            },
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "药品缺货情况分析"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "药品可及性提升途径分析"
+            }
           ]
         },
         {
           "name": "药品价格敏感度与支付行为维度",
           "subtopics": [
-            {"question_numbers": [4], "subtitle": "药品支付方式分析"},
-            {"question_numbers": [5], "subtitle": "药品价格评价分析"},
-            {"question_numbers": [6], "subtitle": "价格变动对购买决策的影响分析"},
-            {"question_numbers": [7], "subtitle": "长期用药价格方案偏好分析"}
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "药品支付方式分析"
+            },
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "药品价格评价分析"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "价格变动对购买决策的影响分析"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "长期用药价格方案偏好分析"
+            }
           ]
         },
         {
           "name": "药品可及性与价格优化诉求维度",
           "subtopics": [
-            {"question_numbers": [8], "subtitle": "可及性与可负担性提升方式分析"},
-            {"question_numbers": [9], "subtitle": "价格敏感度改善建议分析"}
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "可及性与可负担性提升方式分析"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "价格敏感度改善建议分析"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "（心达康胶囊）用于心血瘀阻型冠心病心绞痛患者调查问卷",
+      "dimensions": [
+        {
+          "name": "用药决策与偏好",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "选药优先考虑因素"
+            },
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "治疗药物类型偏好"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "品牌忠诚度重视度"
+            }
+          ]
+        },
+        {
+          "name": "信息获取与渠道行为",
+          "subtopics": [
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "购药渠道选择"
+            },
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "药物信息获取途径"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "广告对购药的影响"
+            }
+          ]
+        },
+        {
+          "name": "产品认知与需求期待",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "新药研发动态关注度"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "新剂型研发需求"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "心达康胶囊改进需求"
+            }
+          ]
+        },
+        {
+          "name": "产品可及性",
+          "subtopics": [
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "心达康胶囊供应情况"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "心达康胶囊——药品认知度调研（患者问卷）",
+      "dimensions": [
+        {
+          "name": "产品信息获取渠道",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "首次接触产品途径"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "医保信息获取渠道"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "产品知识获取渠道"
+            }
+          ]
+        },
+        {
+          "name": "用药行为与核心认知",
+          "subtopics": [
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "产品使用核心原因"
+            },
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "服用方法掌握程度"
+            },
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "产品购买渠道选择"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "产品成分药理关注度"
+            }
+          ]
+        },
+        {
+          "name": "产品评价与政策认知",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "产品价格合理性评价"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "医保报销政策了解度"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "产品包装便利性评价"
+            }
+          ]
+        },
+        {
+          "name": "咨询与口碑推荐",
+          "subtopics": [
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "产品疑问咨询对象"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "产品推荐意愿"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "品牌知名度调研-患者",
+      "dimensions": [
+        {
+          "name": "品牌认知与知晓途径",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "品牌知晓途径"
+            },
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "核心适应症认知"
+            },
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "品牌信息主动询问意愿"
+            }
+          ]
+        },
+        {
+          "name": "用药决策与选择因素",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "用药选择核心原因"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "非疗效类选择影响因素"
+            }
+          ]
+        },
+        {
+          "name": "用药效果与品牌信任",
+          "subtopics": [
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "用药症状改善速度"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "品牌可信度评价"
+            }
+          ]
+        },
+        {
+          "name": "品牌忠诚度与复购倾向",
+          "subtopics": [
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "同类药品选择倾向"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "与同类品牌突出优势对比"
+            }
+          ]
+        },
+        {
+          "name": "信息获取偏好与宣传渠道",
+          "subtopics": [
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "品牌宣传关注渠道"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "药品知识获取偏好方式"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "认知度调研问卷-患者",
+      "dimensions": [
+        {
+          "name": "药物接触与选择原因",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "首次接触药物的原因"
+            }
+          ]
+        },
+        {
+          "name": "药物认知与了解程度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "药物治疗疾病认知"
+            },
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "药物治疗疗程认知"
+            },
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "不良反应认知度分析"
+            }
+          ]
+        },
+        {
+          "name": "用药体验与评价分析",
+          "subtopics": [
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "治疗效果评价"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "用药方式倾向分析"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "价格合理性分析"
+            }
+          ]
+        },
+        {
+          "name": "用药行为与传播意愿分析",
+          "subtopics": [
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "用药经验交流分析"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "传播意愿分析"
+            }
+          ]
+        },
+        {
+          "name": "服务需求与关注重点分析",
+          "subtopics": [
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "药物信息补充了解需求分析"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "用药指导服务满意度分析"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "使用过程关注重点分析"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "药品可及性与价格敏感度调查",
+      "dimensions": [
+        {
+          "name": "用药基础信息与认知",
+          "subtopics": [
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "用药适应症"
+            },
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "药品使用/知晓状态"
+            }
+          ]
+        },
+        {
+          "name": "药品可及性分析",
+          "subtopics": [
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "购买/获取渠道分析"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "药品短缺经历分析"
+            }
+          ]
+        },
+        {
+          "name": "价格感知与影响",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "药品价格接受度分析"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "药品单支价格分析"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "价格对用药选择的影响程度"
+            }
+          ]
+        },
+        {
+          "name": "价格接受影响因素分析",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "医疗费用支付方式"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "市场竞争力关键因素分析"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "价格接受的主要因素分析"
+            }
+          ]
+        },
+        {
+          "name": "药品优化需求与用药认知",
+          "subtopics": [
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "药品改进方向分析"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "医生需说明的用药信息"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "治疗急性血栓性脑梗死患者调查问卷",
+      "dimensions": [
+        {
+          "name": "药物选择因素分析",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "最优先考虑因素分析"
+            }
+          ]
+        },
+        {
+          "name": "使用途径与信息获取分析",
+          "subtopics": [
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "使用途径分析"
+            },
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "信息获取分析"
+            }
+          ]
+        },
+        {
+          "name": "使用感受与品牌信任度分析",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "使用感受分析"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "品牌信任度分析"
+            }
+          ]
+        },
+        {
+          "name": "治疗便利性与供应情况分析",
+          "subtopics": [
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "治疗便利性分析"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "供应情况分析"
+            }
+          ]
+        },
+        {
+          "name": "药物关注度与优化建议",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "药物关注度分析"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "药物协同作用分析"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "药物优化建议"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "补中益气口服液的价格敏感度调研-患者",
+      "dimensions": [
+        {
+          "name": "购药需求动机",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "核心购买需求分析"
+            }
+          ]
+        },
+        {
+          "name": "购药行为",
+          "subtopics": [
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "购买渠道分析"
+            },
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "购买频次分析"
+            },
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "医保使用情况分析"
+            }
+          ]
+        },
+        {
+          "name": "价格与品牌决策",
+          "subtopics": [
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "忽视价格坚持选购的原因分析"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "不因价格弃换品牌的情况分析"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "品牌与价格权衡考量分析"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "药品核心关注要点分析"
+            }
+          ]
+        },
+        {
+          "name": "支付意愿与溢价因素",
+          "subtopics": [
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "医生推荐高价药品的选择分析"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "支付溢价意愿分析"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "原付高价的推动因素分析"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "长期服用价格影响变化分析"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "补中益气口服液产品满意度调研-患者",
+      "dimensions": [
+        {
+          "name": "基础用药信息",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "用药时长"
+            },
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "用药原因"
+            }
+          ]
+        },
+        {
+          "name": "产品认知",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "产品认知渠道"
+            }
+          ]
+        },
+        {
+          "name": "产品体验评价",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "口味接受度"
+            },
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "剂型便利性"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "说明书详细度与易懂性"
+            }
+          ]
+        },
+        {
+          "name": "疗效评价",
+          "subtopics": [
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "体倦乏力症状改善效果"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "长期服用效果稳定性"
+            }
+          ]
+        },
+        {
+          "name": "安全性评价",
+          "subtopics": [
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "服用不适感反馈"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "与同类产品温和度对比"
+            }
+          ]
+        },
+        {
+          "name": "口碑与推荐意愿",
+          "subtopics": [
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "产品推荐意愿"
+            }
+          ]
+        },
+        {
+          "name": "用药需求与优化建议",
+          "subtopics": [
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "用药专业指导需求"
+            },
+            {
+              "question_numbers": [
+                13
+              ],
+              "subtitle": "产品核心优化方向"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "补中益气口服液-特定疾病领域调研（体倦乏力）-患者",
+      "dimensions": [
+        {
+          "name": "体倦乏力基础症状特征",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "服药前症状出现频率"
+            },
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "服药前因体倦乏力每日休息时长"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "服药前症状最明显的时段"
+            }
+          ]
+        },
+        {
+          "name": "体倦乏力相关改善效果",
+          "subtopics": [
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "四肢沉重感变化"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "白天犯困情况缓解程度"
+            },
+            {
+              "question_numbers": [
+                14
+              ],
+              "subtitle": "身体耐力提升情况"
+            }
+          ]
+        },
+        {
+          "name": "身体综合状态与生活质量改善",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "情绪状态改善情况"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "对温度变化适应能力提升情况"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "夜间起夜次数变化"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "食欲变化情况"
+            },
+            {
+              "question_numbers": [
+                13
+              ],
+              "subtitle": "睡眠质量改善情况"
+            }
+          ]
+        },
+        {
+          "name": "用药相关行为与前期干预情况",
+          "subtopics": [
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "联合调理产品使用情况"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "前期改善体倦乏力方法尝试"
+            }
+          ]
+        },
+        {
+          "name": "产品感官体验评价",
+          "subtopics": [
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "药品气味接受度"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "补中益气口服液的用药体验与疗效反馈调研问卷-患者",
+      "dimensions": [
+        {
+          "name": "用药基础信息",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "用药原因分析"
+            },
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "药品获取途径分析"
+            },
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "用药时长分析"
+            }
+          ]
+        },
+        {
+          "name": "用药行为与习惯",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "服用剂量规范性分析"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "联合调理方式分析"
+            }
+          ]
+        },
+        {
+          "name": "药品使用体验",
+          "subtopics": [
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "药品口味接受度分析"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "包装设计满意度分析"
+            }
+          ]
+        },
+        {
+          "name": "用药安全性",
+          "subtopics": [
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "用药后不适情况分析"
+            }
+          ]
+        },
+        {
+          "name": "疗效评价",
+          "subtopics": [
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "主要症状改善程度分析"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "与同类药疗效对比分析"
+            }
+          ]
+        },
+        {
+          "name": "药品改进需求",
+          "subtopics": [
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "产品改进方向分析"
+            }
+          ]
+        },
+        {
+          "name": "临床价值延伸",
+          "subtopics": [
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "其他积极获益分析"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "厄贝沙坦氢氯噻嗪片-价格敏感度调研-患者",
+      "dimensions": [
+        {
+          "name": "价格敏感度与购买决策",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "价格对购买决策的影响分析"
+            },
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "对单盒或单剂量价格的关注分析"
+            }
+          ]
+        },
+        {
+          "name": "价格变化与购买意愿",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "对高比例报销版本的选择意愿分析"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "价格不变增量后的购买倾向分析"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "价格不变包装便携性的影响分析"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "价格与额外服务的选择分析"
+            }
+          ]
+        },
+        {
+          "name": "购买渠道",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "药品的主要购买渠道分析"
+            }
+          ]
+        },
+        {
+          "name": "价格水平与负担感知",
+          "subtopics": [
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "对药品价格水平的认知分析"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "不同厂家药品价格差异感知分析"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "价格对长期用药负担的影响分析"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "厄贝沙坦氢氯噻嗪片-疾病认知水平-患者",
+      "dimensions": [
+        {
+          "name": "疾病认知",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "发病知晓途径分析"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "疾病长期危害认知分析"
+            }
+          ]
+        },
+        {
+          "name": "用药认知",
+          "subtopics": [
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "药物治疗范围认知分析"
+            },
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "用药规范认知分析"
+            },
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "复查项目认知分析"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "不良反应关注度分析"
+            }
+          ]
+        },
+        {
+          "name": "健康管理认知",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "疾病管理核心措施认知分析"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "饮食管理认知分析"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "情绪与疾病关联认知分析"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "治疗相关“新说法”处理方式分析"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "健康管理主要困扰分析"
+            }
+          ]
+        },
+        {
+          "name": "用药知识的获取途径分析",
+          "subtopics": [
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "用药知识的获取途径分析"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "厄贝沙坦氢氯噻嗪片对特定疾病领域的调研（原发性高血压）-患者",
+      "dimensions": [
+        {
+          "name": "患者诊疗与用药基础",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "确诊时长与病程阶段分析"
+            },
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "用药启动核心动因分析"
+            }
+          ]
+        },
+        {
+          "name": "用药行为与依从性",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "服药规律执行情况分析"
+            }
+          ]
+        },
+        {
+          "name": "疗效与安全性反馈",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "整体血压控制效果分析"
+            },
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "高血压相关症状改善情况分析"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "不良反应发生情况分析"
+            }
+          ]
+        },
+        {
+          "name": "生活质量与自我管理",
+          "subtopics": [
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "整体生活质量变化分析"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "饮食配合执行情况分析"
+            }
+          ]
+        },
+        {
+          "name": "就医与药物改进需求",
+          "subtopics": [
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "就医过程支持需求分析"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "用药感受反馈行为分析"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "药物核心改进诉求分析"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "厄贝沙坦氢氯噻嗪片用药体验与疗效反馈-患者调查问卷",
+      "dimensions": [
+        {
+          "name": "药品疗效",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "血压控制效果分析"
+            }
+          ]
+        },
+        {
+          "name": "药品安全性",
+          "subtopics": [
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "头晕头痛不良反应分析"
+            },
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "口渴多尿不良反应分析"
+            }
+          ]
+        },
+        {
+          "name": "用药行为与习惯",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "购药渠道分析"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "剂量遵循情况分析"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "联合用药情况分析"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "联合用药咨询情况分析"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "血压监测频率分析"
+            }
+          ]
+        },
+        {
+          "name": "用药便利性",
+          "subtopics": [
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "服药频率满意度分析"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "药品包装便利性分析"
+            }
+          ]
+        },
+        {
+          "name": "药品经济性",
+          "subtopics": [
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "价格负担影响分析"
+            }
+          ]
+        },
+        {
+          "name": "药品可及性",
+          "subtopics": [
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "药品供应稳定性分析"
+            }
+          ]
+        },
+        {
+          "name": "用药指导信息评价",
+          "subtopics": [
+            {
+              "question_numbers": [
+                13
+              ],
+              "subtitle": "说明书信息清晰度分析"
+            },
+            {
+              "question_numbers": [
+                14
+              ],
+              "subtitle": "用药指导详细准确性分析"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "厄贝沙坦氢氯噻嗪片依从性与用药习惯的调研问卷-患者",
+      "dimensions": [
+        {
+          "name": "用药基础认知与信息获取",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "用药原因分析"
+            },
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "药物作用认知分析"
+            },
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "用药知识获取途径分析"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "联合用药/保健品情况分析"
+            }
+          ]
+        },
+        {
+          "name": "用药行为与习惯",
+          "subtopics": [
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "血压监测频率分析"
+            },
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "饮食习惯调整分析"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "剂量调整行为分析"
+            }
+          ]
+        },
+        {
+          "name": "用药提醒与依从性",
+          "subtopics": [
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "服药提醒方式分析"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "依从性改善建议分析"
+            }
+          ]
+        },
+        {
+          "name": "健康教育参与情况",
+          "subtopics": [
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "培训讲座参与度分析"
+            }
           ]
         }
       ]

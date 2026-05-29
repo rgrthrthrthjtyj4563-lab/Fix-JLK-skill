@@ -533,6 +533,14 @@ class TemplateRenderer:
                 return i
         return None
 
+    def _normalize_summary_heading(self):
+        """Migrate legacy template heading text to the current 5.2 contract."""
+        old_idx = self._find_exact_paragraph_index("5.2调研结果分析")
+        new_idx = self._find_exact_paragraph_index("5.2调研结果总结")
+        if old_idx is not None and new_idx is None:
+            _set_paragraph_text(self._get_paragraph_at(old_idx), "5.2调研结果总结")
+            self._rebuild_anchors()
+
     def _find_paragraph_prefix_index(self, text_prefix: str, start: int = 0) -> Optional[int]:
         for i, info in self.anchors.items():
             if i < start:
@@ -591,24 +599,35 @@ class TemplateRenderer:
         rows = tbl.findall(qn("w:tr"))
 
         sample_size = self.meta.get("sample_size") or self.meta.get("valid_count") or "问卷未提供"
+        settlement = self.payload.get("service", {}).get("settlement", {})
+
+        def format_amount(value: object) -> str:
+            try:
+                return f"{int(value):,}"
+            except Exception:
+                return str(value or "")
+
+        def set_cell_text(cells: list, index: int, text: str) -> None:
+            if len(cells) <= index:
+                return
+            for p in cells[index].findall(qn("w:p")):
+                for r in p.findall(qn("w:r")):
+                    for t in r.findall(qn("w:t")):
+                        t.text = text
+                        t.set(qn("xml:space"), "preserve")
 
         # Row 1: sample data (index 0-based = 1)
         if len(rows) >= 2:
             cells = rows[1].findall(qn("w:tc"))
             # cells[3] = count, cells[4] = total
-            if len(cells) >= 4:
-                # Set sample count
-                for p in cells[3].findall(qn("w:p")):
-                    for r in p.findall(qn("w:r")):
-                        for t in r.findall(qn("w:t")):
-                            t.text = f"{sample_size}例"
-                            t.set(qn("xml:space"), "preserve")
-            if len(cells) >= 5:
-                for p in cells[4].findall(qn("w:p")):
-                    for r in p.findall(qn("w:r")):
-                        for t in r.findall(qn("w:t")):
-                            t.text = f"{sample_size}00元"
-                            t.set(qn("xml:space"), "preserve")
+            set_cell_text(cells, 3, f"{sample_size}例")
+            set_cell_text(cells, 4, format_amount(settlement.get("sample_amount")))
+        if len(rows) >= 3:
+            cells = rows[2].findall(qn("w:tc"))
+            set_cell_text(cells, 4, format_amount(settlement.get("report_amount")))
+        if len(rows) >= 4:
+            cells = rows[3].findall(qn("w:tc"))
+            set_cell_text(cells, 4, format_amount(settlement.get("total_amount")))
 
     # ─── Section 3: Service Unit ────────────────────────────────────────
 
@@ -622,7 +641,7 @@ class TemplateRenderer:
             if info["type"] == "p" and "服务单位" in info["text"]:
                 p = self._get_paragraph_at(i)
                 _set_paragraph_text(p, f"服务单位：{unit}")
-                _set_paragraph_style_props(p, "汉仪中宋简", 12, False, "right")
+                _set_paragraph_style_props(p, "宋体", 12, False, "right")
                 if date_str:
                     new_p = OxmlElement("w:p")
                     r = OxmlElement("w:r")
@@ -633,7 +652,7 @@ class TemplateRenderer:
                     new_p.append(r)
                     parent = self.body
                     parent.insert(list(parent).index(p) + 1, new_p)
-                    _set_paragraph_style_props(new_p, "汉仪中宋简", 12, False, "right")
+                    _set_paragraph_style_props(new_p, "宋体", 12, False, "right")
                 self._rebuild_anchors()
                 break
 
@@ -677,7 +696,7 @@ class TemplateRenderer:
             r.append(t)
             toc_heading.append(r)
             parent.insert(insert_at, toc_heading)
-            _set_paragraph_style_props(toc_heading, "汉仪中宋简", 16, True, "left")
+            _set_paragraph_style_props(toc_heading, "宋体", 16, True, "left")
             insert_at += 1
 
         # Create a new paragraph with TOC field
@@ -722,7 +741,7 @@ class TemplateRenderer:
 
         # Replace SDT with new paragraph
         parent.replace(sdt_elem, new_p)
-        _set_paragraph_style_props(new_p, "汉仪中宋简", 12, False, "left")
+        _set_paragraph_style_props(new_p, "宋体", 12, False, "left")
         # Rebuild anchors because body structure changed
         self._rebuild_anchors()
 
@@ -825,7 +844,7 @@ class TemplateRenderer:
 
         heading = self._get_paragraph_at(idx)
         _strip_numPr(heading)
-        _set_paragraph_style_props(heading, "汉仪中宋简", 22, True, "center")
+        _set_paragraph_style_props(heading, "宋体", 22, True, "center")
 
         title_idx = self._find_anchor_index("调查问卷分析报告", start=idx + 1)
         if title_idx is None:
@@ -850,7 +869,7 @@ class TemplateRenderer:
         for index, paragraph in enumerate(body_paragraphs):
             if index < len(preface):
                 _set_paragraph_text(paragraph, preface[index])
-                _set_paragraph_style_props(paragraph, "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(paragraph, "宋体", 12, False)
             else:
                 parent = paragraph.getparent()
                 if parent is not None:
@@ -873,7 +892,7 @@ class TemplateRenderer:
 
         p = self._get_paragraph_at(idx)
         _set_paragraph_text(p, title)
-        _set_paragraph_style_props(p, "汉仪中宋简", 22, True, "center")
+        _set_paragraph_style_props(p, "宋体", 22, True, "center")
 
     def replace_project_background(self):
         """Replace project background paragraphs with structured 4-section content."""
@@ -887,7 +906,7 @@ class TemplateRenderer:
             return
 
         heading = self._get_paragraph_at(idx)
-        _set_paragraph_style_props(heading, "汉仪中宋简", 16, True, "left")
+        _set_paragraph_style_props(heading, "宋体", 16, True, "left")
 
         # Background paragraphs follow the heading
         bg_indices = []
@@ -905,7 +924,7 @@ class TemplateRenderer:
             if pi < len(paragraphs):
                 p = self._get_paragraph_at(bi)
                 _set_paragraph_text(p, paragraphs[pi])
-                _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(p, "宋体", 12, False)
             else:
                 # Remove extra template paragraphs
                 p = self._get_paragraph_at(bi)
@@ -925,7 +944,7 @@ class TemplateRenderer:
         if title_idx is None:
             return
         heading = self._get_paragraph_at(title_idx)
-        _set_paragraph_style_props(heading, "汉仪中宋简", 16, True, "left")
+        _set_paragraph_style_props(heading, "宋体", 16, True, "left")
 
         target_indices = []
         for i in range(title_idx + 1, title_idx + 12):
@@ -944,7 +963,7 @@ class TemplateRenderer:
             if line_index < len(target_indices):
                 p = self._get_paragraph_at(target_indices[line_index])
                 _set_paragraph_text(p, line)
-                _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(p, "宋体", 12, False)
         for extra_idx in target_indices[len(lines):]:
             p = self._get_paragraph_at(extra_idx)
             p.getparent().remove(p)
@@ -960,14 +979,14 @@ class TemplateRenderer:
         if idx is None:
             return
         heading = self._get_paragraph_at(idx)
-        _set_paragraph_style_props(heading, "汉仪中宋简", 16, True, "left")
+        _set_paragraph_style_props(heading, "宋体", 16, True, "left")
 
         # Intro paragraph (first after heading)
         intro_idx = idx + 1
         if intro_idx in self.anchors:
             p = self._get_paragraph_at(intro_idx)
             _set_paragraph_text(p, qn_data.get("intro", ""))
-            _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
+            _set_paragraph_style_props(p, "宋体", 12, False)
 
         # Items: find the numbered items (1．, 2．, 3．, 4．)
         items = qn_data.get("items", [])
@@ -984,14 +1003,14 @@ class TemplateRenderer:
             if pi < len(items):
                 p = self._get_paragraph_at(bi)
                 _set_paragraph_text(p, items[pi])
-                _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(p, "宋体", 12, False)
 
         # Closing paragraph (after items)
         closing_idx = (item_indices[-1] + 1) if item_indices else intro_idx + 5
         if closing_idx in self.anchors:
             p = self._get_paragraph_at(closing_idx)
             _set_paragraph_text(p, qn_data.get("closing", ""))
-            _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
+            _set_paragraph_style_props(p, "宋体", 12, False)
 
     def replace_result_analysis_intro(self):
         """Replace the intro paragraph for 问卷结果分析."""
@@ -1003,14 +1022,14 @@ class TemplateRenderer:
         if idx is None:
             return
         heading = self._get_paragraph_at(idx)
-        _set_paragraph_style_props(heading, "汉仪中宋简", 16, True, "left")
+        _set_paragraph_style_props(heading, "宋体", 16, True, "left")
 
         # Intro is the paragraph right after (before the chart)
         intro_idx = idx + 1
         if intro_idx in self.anchors and self.anchors[intro_idx]["type"] == "p":
             p = self._get_paragraph_at(intro_idx)
             _set_paragraph_text(p, intro[0] if intro else "")
-            _set_paragraph_style_props(p, "汉仪中宋简", 12, False)
+            _set_paragraph_style_props(p, "宋体", 12, False)
 
     def replace_analysis_sections(self):
         """Replace all 4.x analysis sections in-place.
@@ -1139,7 +1158,7 @@ class TemplateRenderer:
 
             section_title = payload_sec.get("section_title", "")
             _set_paragraph_text(child, f"{sec_num} {section_title}".strip())
-            _set_paragraph_style_props(child, "汉仪中宋简", 16, True, "left")
+            _set_paragraph_style_props(child, "宋体", 16, True, "left")
 
             subtopics = payload_sec.get("subtopics", [])
             visual_groups = payload_sec.get("visual_groups", [])
@@ -1169,7 +1188,7 @@ class TemplateRenderer:
                 subtitle = subtopic.get("subtitle", "")
                 _set_paragraph_text(unit["heading"], f"（{unit_idx + 1}） {subtitle}".strip())
                 _strip_numPr(unit["heading"])
-                _set_paragraph_style_props(unit["heading"], "汉仪中宋简", 12, True, "left")
+                _set_paragraph_style_props(unit["heading"], "宋体", 12, True, "left")
 
                 question_refs = subtopic.get("question_refs", [])
                 tables = ensure_tables(unit, len(question_refs), unit["heading"])
@@ -1206,7 +1225,7 @@ class TemplateRenderer:
                 for para_idx, paragraph in enumerate(body_paragraphs):
                     if para_idx < len(paragraphs):
                         _set_paragraph_text(paragraph, paragraphs[para_idx])
-                        _set_paragraph_style_props(paragraph, "汉仪中宋简", 12, False)
+                        _set_paragraph_style_props(paragraph, "宋体", 12, False)
                     else:
                         remove_element(paragraph)
 
@@ -1285,6 +1304,7 @@ class TemplateRenderer:
         """Replace 调研结果 summary sections."""
         summary = self.payload.get("summary", {})
 
+        self._normalize_summary_heading()
         self._ensure_summary_headings()
         self._rebuild_anchors()
 
@@ -1293,11 +1313,11 @@ class TemplateRenderer:
         if key_issue_items:
             self._replace_key_issue_section(key_issue_items)
 
-        # 5.2 调研结果分析
+        # 5.2 调研结果总结
         overall = summary.get("overall_analysis", [])
         if overall:
             self._replace_section_body_by_heading(
-                "5.2调研结果分析",
+                "5.2调研结果总结",
                 "5.3建议",
                 overall,
             )
@@ -1318,7 +1338,7 @@ class TemplateRenderer:
         if self._find_exact_paragraph_index("调研结果") is not None and self._find_exact_paragraph_index("5.1问卷重点问题分析") is not None:
             return
 
-        anchor_idx = self._find_exact_paragraph_index("5.2调研结果分析")
+        anchor_idx = self._find_exact_paragraph_index("5.2调研结果总结")
         if anchor_idx is None:
             return
         ref_child = self._get_paragraph_at(anchor_idx)
@@ -1334,7 +1354,7 @@ class TemplateRenderer:
             r.append(t)
             new_p.append(r)
             ref_child.addprevious(new_p)
-            _set_paragraph_style_props(new_p, "汉仪中宋简", 16, True, "left")
+            _set_paragraph_style_props(new_p, "宋体", 16, True, "left")
 
     def _make_chart_png(self, chart: dict, output_path: Path, role: str = "overview") -> Optional[Path]:
         categories = [str(value) for value in chart.get("categories", []) if str(value)]
@@ -1527,7 +1547,7 @@ class TemplateRenderer:
 
         self._rebuild_anchors()
         start_idx = self._find_exact_paragraph_index("5.1问卷重点问题分析")
-        end_idx = self._find_exact_paragraph_index("5.2调研结果分析", start=(start_idx + 1) if start_idx is not None else 0)
+        end_idx = self._find_exact_paragraph_index("5.2调研结果总结", start=(start_idx + 1) if start_idx is not None else 0)
         if start_idx is None or end_idx is None or end_idx <= start_idx:
             self._rebuild_anchors()
             return
@@ -1551,7 +1571,7 @@ class TemplateRenderer:
 
     def _replace_key_issue_section(self, key_issue_items: list[dict]):
         start_idx = self._find_exact_paragraph_index("5.1问卷重点问题分析")
-        end_idx = self._find_exact_paragraph_index("5.2调研结果分析", start=(start_idx + 1) if start_idx is not None else 0)
+        end_idx = self._find_exact_paragraph_index("5.2调研结果总结", start=(start_idx + 1) if start_idx is not None else 0)
         if start_idx is None or end_idx is None or end_idx <= start_idx:
             return
 
@@ -1573,7 +1593,7 @@ class TemplateRenderer:
                 _set_paragraph_text(text_paragraphs[pi], text)
                 _set_paragraph_style_props(
                     text_paragraphs[pi],
-                    "汉仪中宋简",
+                    "宋体",
                     12,
                     False,
                     "both",
@@ -1591,7 +1611,7 @@ class TemplateRenderer:
                 insert_before.addprevious(new_p)
                 _set_paragraph_style_props(
                     new_p,
-                    "汉仪中宋简",
+                    "宋体",
                     12,
                     False,
                     "both",
@@ -1634,7 +1654,7 @@ class TemplateRenderer:
         for pi, text in enumerate(new_paragraphs):
             if pi < len(body_paragraphs):
                 _set_paragraph_text(body_paragraphs[pi], text)
-                _set_paragraph_style_props(body_paragraphs[pi], "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(body_paragraphs[pi], "宋体", 12, False)
             else:
                 new_p = OxmlElement("w:p")
                 new_r = OxmlElement("w:r")
@@ -1644,7 +1664,7 @@ class TemplateRenderer:
                 new_r.append(new_t)
                 new_p.append(new_r)
                 insert_before.addprevious(new_p)
-                _set_paragraph_style_props(new_p, "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(new_p, "宋体", 12, False)
 
         for extra in body_paragraphs[len(new_paragraphs):]:
             extra.getparent().remove(extra)
@@ -1671,7 +1691,7 @@ class TemplateRenderer:
         for pi, paragraph in enumerate(target_paragraphs):
             if pi < len(new_paragraphs):
                 _set_paragraph_text(paragraph, new_paragraphs[pi])
-                _set_paragraph_style_props(paragraph, "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(paragraph, "宋体", 12, False)
             else:
                 paragraph.getparent().remove(paragraph)
 
@@ -1690,7 +1710,7 @@ class TemplateRenderer:
         if att_name:
             p = self._get_paragraph_at(idx)
             _set_paragraph_text(p, f"附件1：{att_name}")
-            _set_paragraph_style_props(p, "汉仪中宋简", 16, True, "left")
+            _set_paragraph_style_props(p, "宋体", 16, True, "left")
 
         attachment2_idx = self._find_anchor_index("附件2", start=idx + 1)
         if attachment2_idx is None:
@@ -1727,7 +1747,7 @@ class TemplateRenderer:
         for index, paragraph in enumerate(target_paragraphs):
             if index < len(desired):
                 _set_paragraph_text(paragraph, desired[index])
-                _set_paragraph_style_props(paragraph, "汉仪中宋简", 12, False)
+                _set_paragraph_style_props(paragraph, "宋体", 12, False)
             else:
                 parent = paragraph.getparent()
                 if parent is not None:
@@ -1747,7 +1767,7 @@ class TemplateRenderer:
         if idx is None:
             return
         heading = self._get_paragraph_at(idx)
-        _set_paragraph_style_props(heading, "汉仪中宋简", 16, True, "center")
+        _set_paragraph_style_props(heading, "宋体", 16, True, "center")
 
         # Replace disclaimer items and right-aligned signature lines.
         item_count = 0
@@ -1763,19 +1783,19 @@ class TemplateRenderer:
             if "服务提供单位" in text:
                 p = self._get_paragraph_at(i)
                 _set_paragraph_text(p, f"服务提供单位:{unit}")
-                _set_paragraph_style_props(p, "汉仪中宋简", 12, False, "right", body_layout=True, first_line_chars=0)
+                _set_paragraph_style_props(p, "宋体", 12, False, "right", body_layout=True, first_line_chars=0)
                 unit_replaced = True
                 continue
             if re.match(r"20\d{2}年", text):
                 p = self._get_paragraph_at(i)
                 _set_paragraph_text(p, date_str)
-                _set_paragraph_style_props(p, "汉仪中宋简", 12, False, "right", body_layout=True, first_line_chars=0)
+                _set_paragraph_style_props(p, "宋体", 12, False, "right", body_layout=True, first_line_chars=0)
                 date_replaced = True
                 continue
             if text.startswith("（") and item_count < len(items):
                 p = self._get_paragraph_at(i)
                 _set_paragraph_text(p, items[item_count])
-                _set_paragraph_style_props(p, "汉仪中宋简", 12, False, "both", body_layout=True, first_line_chars=0)
+                _set_paragraph_style_props(p, "宋体", 12, False, "both", body_layout=True, first_line_chars=0)
                 item_count += 1
 
     def restyle_key_issue_titles(self):
@@ -1788,7 +1808,7 @@ class TemplateRenderer:
             if idx is None:
                 continue
             paragraph = self._get_paragraph_at(idx)
-            _set_paragraph_style_props(paragraph, "汉仪中宋简", 12, True, "left", body_layout=False)
+            _set_paragraph_style_props(paragraph, "宋体", 12, True, "left", body_layout=False)
 
     # ─── Paragraph formatting ───────────────────────────────────────────
     
@@ -1874,9 +1894,9 @@ class TemplateRenderer:
             if rFonts is None:
                 rFonts = OxmlElement("w:rFonts")
                 rPr.append(rFonts)
-            rFonts.set(qn("w:ascii"), "汉仪中宋简")
-            rFonts.set(qn("w:hAnsi"), "汉仪中宋简")
-            rFonts.set(qn("w:eastAsia"), "汉仪中宋简")
+            rFonts.set(qn("w:ascii"), "宋体")
+            rFonts.set(qn("w:hAnsi"), "宋体")
+            rFonts.set(qn("w:eastAsia"), "宋体")
 
     def _apply_red_font_replacements(self):
         """Apply red-font variable replacements across ALL text in the document.
@@ -2124,6 +2144,7 @@ class TemplateRenderer:
         
         # Map old → new from the template's original data
         replacements = {}
+        replacements["汉仪中宋简"] = "宋体"
         if region:
             replacements["广东省"] = region
         if product and product != "厄贝沙坦氢氯噻嗪片":
