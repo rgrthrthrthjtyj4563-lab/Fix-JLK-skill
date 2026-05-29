@@ -1540,33 +1540,6 @@ class TemplateRenderer:
             if extra.getparent() is not None:
                 extra.getparent().remove(extra)
 
-        key_issue_items = self.payload.get("summary", {}).get("key_issue_items", [])
-        if not key_issue_items:
-            self._rebuild_anchors()
-            return
-
-        self._rebuild_anchors()
-        start_idx = self._find_exact_paragraph_index("5.1问卷重点问题分析")
-        end_idx = self._find_exact_paragraph_index("5.2调研结果总结", start=(start_idx + 1) if start_idx is not None else 0)
-        if start_idx is None or end_idx is None or end_idx <= start_idx:
-            self._rebuild_anchors()
-            return
-
-        insert_before = self._get_paragraph_at(start_idx + 1) if start_idx + 1 < end_idx else self._get_paragraph_at(end_idx)
-        for idx, item in enumerate(key_issue_items[:2]):
-            chart = {
-                "title": item.get("chart_title", ""),
-                "chart_type": item.get("chart_type", "pie"),
-                "categories": item.get("categories", []),
-                "values": item.get("values", []),
-            }
-            png = self._make_chart_png(chart, chart_dir / f"key_issue_{idx + 1}.png", role="key_issue")
-            if not png:
-                continue
-            image_p = OxmlElement("w:p")
-            insert_before.addprevious(image_p)
-            self._replace_paragraph_with_image(image_p, png)
-
         self._rebuild_anchors()
 
     def _replace_key_issue_section(self, key_issue_items: list[dict]):
@@ -1710,7 +1683,7 @@ class TemplateRenderer:
         if att_name:
             p = self._get_paragraph_at(idx)
             _set_paragraph_text(p, f"附件1：{att_name}")
-            _set_paragraph_style_props(p, "宋体", 16, True, "left")
+            _set_paragraph_style_props(p, "宋体", 22, True, "left")
 
         attachment2_idx = self._find_anchor_index("附件2", start=idx + 1)
         if attachment2_idx is None:
@@ -2072,6 +2045,164 @@ class TemplateRenderer:
         docx_path.unlink()
         tmp_path.rename(docx_path)
 
+    def _chart_paragraph_xml(self, relationship_id: str, doc_pr_id: int, name: str):
+        w_ns = NS["w"]
+        r_ns = NS["r"]
+        wp_ns = NS["wp"]
+        a_ns = NS["a"]
+        c_ns = NS["c"]
+
+        p = ET.Element(f"{{{w_ns}}}p")
+        p_pr = ET.SubElement(p, f"{{{w_ns}}}pPr")
+        jc = ET.SubElement(p_pr, f"{{{w_ns}}}jc")
+        jc.set(f"{{{w_ns}}}val", "center")
+        r = ET.SubElement(p, f"{{{w_ns}}}r")
+        drawing = ET.SubElement(r, f"{{{w_ns}}}drawing")
+        inline = ET.SubElement(drawing, f"{{{wp_ns}}}inline")
+        inline.set("distT", "0")
+        inline.set("distB", "0")
+        inline.set("distL", "0")
+        inline.set("distR", "0")
+        extent = ET.SubElement(inline, f"{{{wp_ns}}}extent")
+        extent.set("cx", "5486400")
+        extent.set("cy", "3200400")
+        effect_extent = ET.SubElement(inline, f"{{{wp_ns}}}effectExtent")
+        for attr in ["l", "t", "r", "b"]:
+            effect_extent.set(attr, "0")
+        doc_pr = ET.SubElement(inline, f"{{{wp_ns}}}docPr")
+        doc_pr.set("id", str(doc_pr_id))
+        doc_pr.set("name", name)
+        ET.SubElement(inline, f"{{{wp_ns}}}cNvGraphicFramePr")
+        graphic = ET.SubElement(inline, f"{{{a_ns}}}graphic")
+        graphic_data = ET.SubElement(graphic, f"{{{a_ns}}}graphicData")
+        graphic_data.set("uri", c_ns)
+        chart = ET.SubElement(graphic_data, f"{{{c_ns}}}chart")
+        chart.set(f"{{{r_ns}}}id", relationship_id)
+        return p
+
+    def _insert_key_issue_native_charts(self, docx_path: Path) -> None:
+        key_issue_items = self.payload.get("summary", {}).get("key_issue_items", [])
+        if len(key_issue_items) < 2:
+            return
+
+        tmp_path = docx_path.with_suffix(".keycharts.tmp.docx")
+        rel_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
+        content_ns = "http://schemas.openxmlformats.org/package/2006/content-types"
+        chart_content_type = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
+        chart_rel_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"
+
+        with zipfile.ZipFile(docx_path, "r") as zin:
+            chart_payloads = []
+            for idx, item in enumerate(key_issue_items[:2], start=3):
+                source_chart = zin.read("word/charts/chart1.xml")
+                with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tf:
+                    tf.write(source_chart)
+                    chart_path = Path(tf.name)
+                try:
+                    _update_chart_data(
+                        chart_path,
+                        [str(value) for value in item.get("categories", [])],
+                        [float(value) for value in item.get("values", [])],
+                        item.get("chart_title", ""),
+                    )
+                    chart_payloads.append((f"word/charts/chart{idx}.xml", chart_path.read_bytes()))
+                finally:
+                    chart_path.unlink()
+
+            document_root = ET.fromstring(zin.read("word/document.xml"))
+            body = document_root.find(qn("w:body"))
+            if body is None:
+                return
+
+            def paragraph_text(element) -> str:
+                return "".join(node.text or "" for node in element.findall(f".//{{{NS['w']}}}t")).strip()
+
+            children = list(body)
+            start_idx = next((idx for idx, child in enumerate(children) if child.tag == qn("w:p") and paragraph_text(child) == "5.1问卷重点问题分析"), None)
+            end_idx = next((idx for idx, child in enumerate(children) if child.tag == qn("w:p") and paragraph_text(child) == "5.2调研结果总结"), None)
+            if start_idx is None or end_idx is None or end_idx <= start_idx:
+                return
+
+            for child in children[start_idx + 1:end_idx]:
+                if child.findall(f".//{{{NS['c']}}}chart"):
+                    body.remove(child)
+
+            rels_root = ET.fromstring(zin.read("word/_rels/document.xml.rels"))
+            for rel in list(rels_root):
+                if rel.attrib.get("Target") in {"charts/chart3.xml", "charts/chart4.xml"}:
+                    rels_root.remove(rel)
+            used_ids = {rel.attrib.get("Id", "") for rel in rels_root}
+
+            def next_rid() -> str:
+                numeric = [
+                    int(match.group(1))
+                    for rid in used_ids
+                    for match in [re.match(r"rId(\d+)$", rid)]
+                    if match
+                ]
+                candidate = max(numeric or [0]) + 1
+                while f"rId{candidate}" in used_ids:
+                    candidate += 1
+                rid = f"rId{candidate}"
+                used_ids.add(rid)
+                return rid
+
+            chart_relationships = []
+            for chart_number in (3, 4):
+                rid = next_rid()
+                rel = ET.Element(f"{{{rel_ns}}}Relationship")
+                rel.set("Id", rid)
+                rel.set("Type", chart_rel_type)
+                rel.set("Target", f"charts/chart{chart_number}.xml")
+                rels_root.append(rel)
+                chart_relationships.append((chart_number, rid))
+
+            insert_at = list(body).index(children[start_idx]) + 1
+            for offset, (chart_number, rid) in enumerate(chart_relationships):
+                body.insert(
+                    insert_at + offset,
+                    self._chart_paragraph_xml(rid, 3000 + chart_number, f"重点问题图表 {chart_number - 2}"),
+                )
+
+            content_root = ET.fromstring(zin.read("[Content_Types].xml"))
+            existing_overrides = {
+                override.attrib.get("PartName")
+                for override in content_root.findall(f"{{{content_ns}}}Override")
+            }
+            for chart_number in (3, 4):
+                part_name = f"/word/charts/chart{chart_number}.xml"
+                if part_name not in existing_overrides:
+                    override = ET.Element(f"{{{content_ns}}}Override")
+                    override.set("PartName", part_name)
+                    override.set("ContentType", chart_content_type)
+                    content_root.append(override)
+
+            chart1_rels = zin.read("word/charts/_rels/chart1.xml.rels") if "word/charts/_rels/chart1.xml.rels" in zin.namelist() else None
+            replacements = {
+                "word/document.xml": ET.tostring(document_root, encoding="utf-8", xml_declaration=True),
+                "word/_rels/document.xml.rels": ET.tostring(rels_root, encoding="utf-8", xml_declaration=True),
+                "[Content_Types].xml": ET.tostring(content_root, encoding="utf-8", xml_declaration=True),
+                **dict(chart_payloads),
+            }
+            if chart1_rels:
+                replacements["word/charts/_rels/chart3.xml.rels"] = chart1_rels
+                replacements["word/charts/_rels/chart4.xml.rels"] = chart1_rels
+
+            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
+                written = set()
+                for item in zin.infolist():
+                    if item.filename in replacements:
+                        zout.writestr(item, replacements[item.filename])
+                        written.add(item.filename)
+                    else:
+                        zout.writestr(item, zin.read(item.filename))
+                for filename, data in replacements.items():
+                    if filename not in written:
+                        zout.writestr(filename, data)
+
+        docx_path.unlink()
+        tmp_path.rename(docx_path)
+
     # ─── Main render ────────────────────────────────────────────────────
 
     def render(self, output_path: Path) -> Path:
@@ -2124,8 +2255,8 @@ class TemplateRenderer:
         # Phase 2: Global XML-level text cleanup (catch anything missed)
         self._global_replace_in_xml(output_path)
 
-        # Phase 3: Enable field updates on open. Charts are rendered as PNG
-        # images in the document body to avoid platform-specific Office chart drift.
+        # Phase 3: Insert 5.1 native charts, then enable field updates on open.
+        self._insert_key_issue_native_charts(output_path)
         self._enable_update_fields_on_open(output_path)
 
         return output_path

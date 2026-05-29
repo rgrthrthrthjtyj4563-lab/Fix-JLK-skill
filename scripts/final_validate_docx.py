@@ -341,8 +341,8 @@ def _validate_png_chart_layout(docx_path: Path, payload: dict) -> None:
     if result_drawings != 2 or result_chart_refs != 0:
         raise FinalValidationError("Result-analysis overview charts must render as two PNG drawings, not native charts.")
     if payload.get("summary", {}).get("key_issue_items"):
-        if key_drawings != 2 or key_chart_refs != 0:
-            raise FinalValidationError("5.1 key issue charts must render as two PNG drawings, not native charts.")
+        if key_drawings != 2 or key_chart_refs != 2:
+            raise FinalValidationError("5.1 key issue charts must render as two native Office chart drawings.")
 
     with ZipFile(docx_path) as zipped:
         media = [name for name in zipped.namelist() if name.startswith("word/media/") and name != "word/media/"]
@@ -352,9 +352,10 @@ def _validate_png_chart_layout(docx_path: Path, payload: dict) -> None:
         with ZipFile(template_doc) as zipped:
             template_media = [name for name in zipped.namelist() if name.startswith("word/media/") and name != "word/media/"]
             template_chart_parts = [name for name in zipped.namelist() if re.match(r"word/charts/chart\d+\.xml$", name)]
-        if sorted(chart_parts) != sorted(template_chart_parts):
+        expected_chart_parts = sorted(template_chart_parts + ["word/charts/chart3.xml", "word/charts/chart4.xml"])
+        if sorted(chart_parts) != expected_chart_parts:
             raise FinalValidationError("Rendered docx changed template chart part inventory.")
-        if len(media) < len(template_media) + 4:
+        if len(media) < len(template_media) + 2:
             raise FinalValidationError("Rendered docx is missing generated PNG chart media.")
 
 
