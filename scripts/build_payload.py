@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import re
 from datetime import date, datetime, timedelta
@@ -615,7 +616,71 @@ def choose_analysis_paragraphs(content: list[str], fallback: list[str]) -> list[
     normalized = sanitize_body_paragraphs(content)
     if len(normalized) == 1 and is_complete_analysis(normalized[0]):
         return normalized
+    # Legacy callers may pass fallback; new callers should use
+    # require_ai_analysis_paragraphs() which raises on missing/invalid AI text.
     return fallback
+
+
+def require_ai_analysis_paragraphs(
+    content: list[str],
+    section_number: str,
+    question_ref: str,
+    subtitle: str,
+) -> list[str]:
+    """Validate AI analysis paragraphs for a 4.x subtopic.
+
+    Raises ValueError with diagnostic info if AI text is missing or invalid,
+    instead of silently falling back to programmatic text.
+    """
+    try:
+        from expression_data import (
+            MIN_ANALYSIS_CHARS as ED_MIN,
+            MAX_ANALYSIS_CHARS as ED_MAX,
+            FORBIDDEN_PATTERNS as ED_FORBIDDEN,
+            is_complete_analysis as ed_is_complete,
+        )
+    except ImportError:
+        from .expression_data import (
+            MIN_ANALYSIS_CHARS as ED_MIN,
+            MAX_ANALYSIS_CHARS as ED_MAX,
+            FORBIDDEN_PATTERNS as ED_FORBIDDEN,
+            is_complete_analysis as ed_is_complete,
+        )
+
+    _NUMERIC_PERCENT = r"\d+(?:\.\d+)?[%％]"
+
+    normalized = sanitize_body_paragraphs(content)
+    if not normalized:
+        raise ValueError(
+            f"{section_number} / {question_ref} / {subtitle} "
+            "缺少 AI 分析正文"
+        )
+    if len(normalized) != 1:
+        raise ValueError(
+            f"{section_number} / {question_ref} / {subtitle} "
+            f"AI 分析正文应为 1 段，实际 {len(normalized)} 段"
+        )
+    text = normalized[0]
+    if not ed_is_complete(text):
+        # Provide specific diagnostics
+        diagnostics = []
+        if len(text) < ED_MIN:
+            diagnostics.append(f"字数不足({len(text)}<{ED_MIN})")
+        if len(text) > ED_MAX:
+            diagnostics.append(f"字数超标({len(text)}>{ED_MAX})")
+        if not any(marker in text for marker in ["说明", "表明", "反映", "提示"]):
+            diagnostics.append("缺少分析判断词(说明/表明/反映/提示)")
+        if not any(marker in text for marker in ["整体看", "整体来看", "后续", "需", "仍"]):
+            diagnostics.append("缺少收束词(整体看/后续/需/仍)")
+        if any(re.search(p, text) for p in ED_FORBIDDEN):
+            diagnostics.append("包含禁用模式(A/B/C/D选项等)")
+        if not re.search(_NUMERIC_PERCENT, text):
+            diagnostics.append("缺少数字百分比")
+        raise ValueError(
+            f"{section_number} / {question_ref} / {subtitle} "
+            f"AI 分析正文不合格: {'; '.join(diagnostics) if diagnostics else '未知原因'}"
+        )
+    return normalized
 
 
 def choose_two_paragraphs(content: list[str], fallback: list[str]) -> list[str]:
@@ -999,6 +1064,266 @@ def validate_content_structure(content: dict, grouped: dict) -> None:
                 )
 
 
+class PreflightError(ValueError):
+    """Raised when report_content.md fails preflight checks.
+
+    Attributes:
+        errors: list of error strings describing all failures.
+    """
+    def __init__(self, errors: list[str], result: dict | None = None) -> None:
+        self.errors = errors
+        self.result = result or {"status": "failed", "errors": errors, "warnings": [], "checks": []}
+        super().__init__("PREFLIGHT_FAILED:\n" + "\n".join(f"- {e}" for e in errors))
+
+
+def _parse_preflight_key_issue_refs(raw: object) -> list[str]:
+    if isinstance(raw, list):
+        candidates = [str(item).strip() for item in raw]
+    else:
+        ref_text = str(raw or "").strip()
+        if ref_text.startswith("["):
+            candidates = json.loads(ref_text)
+        else:
+            candidates = [r.strip() for r in ref_text.split(",") if r.strip()]
+
+    normalized = []
+    for candidate in candidates:
+        text = str(candidate).strip()
+        if re.fullmatch(r"\d+", text):
+            text = f"q{int(text):02d}"
+        elif re.fullmatch(r"[qQ]\d+", text):
+            text = f"q{int(text[1:]):02d}"
+        normalized.append(text)
+    return normalized
+
+
+def _closest_theme_candidates(theme: str, candidates: list[str], limit: int = 5) -> list[str]:
+    theme_norm = normalize_space(theme)
+    direct = [
+        candidate for candidate in candidates
+        if theme_norm and (theme_norm in candidate or candidate in theme_norm)
+    ]
+    fuzzy = difflib.get_close_matches(theme_norm, candidates, n=limit, cutoff=0.15)
+    merged = []
+    for candidate in direct + fuzzy:
+        if candidate and candidate not in merged:
+            merged.append(candidate)
+        if len(merged) >= limit:
+            break
+    return merged
+
+
+def preflight_report_content(
+    meta: dict,
+    content: dict,
+    *,
+    library: dict | None = None,
+    questionnaire: dict | None = None,
+) -> dict:
+    """Verify report_content.md completeness before build_payload.
+
+    Checks metadata fields, chapter presence, 4.x analysis paragraphs, and 5.x content.
+    Raises PreflightError with all errors listed if validation fails.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    checks: list[dict] = []
+
+    def record(name: str, passed: bool, message: str = "") -> None:
+        checks.append({"name": name, "status": "passed" if passed else "failed", "message": message})
+        if not passed and message:
+            errors.append(message)
+
+    # ── Front matter checks ──
+    survey_period = meta.get("survey_period") or meta.get("时间")
+    record(
+        "survey_period",
+        bool(survey_period),
+        "缺少 survey_period（front matter 中需提供 survey_period 或 时间）",
+    )
+
+    ki_refs = meta.get("key_issue_question_refs")
+    parsed_refs: list[str] = []
+    if not ki_refs:
+        record("key_issue_question_refs", False, "缺少 key_issue_question_refs（front matter 中需提供 2 道重点题号）")
+    else:
+        try:
+            parsed_refs = _parse_preflight_key_issue_refs(ki_refs)
+            record(
+                "key_issue_question_refs",
+                len(parsed_refs) == 2 and len(set(parsed_refs)) == 2,
+                f"key_issue_question_refs 必须恰好 2 个，当前 {len(parsed_refs)} 个",
+            )
+        except (json.JSONDecodeError, TypeError):
+            record("key_issue_question_refs", False, "key_issue_question_refs 格式错误，期望 JSON 数组如 '[\"q02\", \"q05\"]'")
+
+    # ── Theme / fixed dimension library match ──
+    theme_input = meta.get("theme") or meta.get("主题")
+    theme_entry = None
+    if theme_input and library:
+        theme_normalized = normalize_space(theme_input)
+        matched = False
+        candidates = []
+        for entry in library.get("themes", []):
+            entry_name = normalize_space(entry.get("theme_name", ""))
+            candidates.append(entry_name)
+            if entry_name == theme_normalized:
+                matched = True
+                theme_entry = entry
+                break
+        if not matched:
+            closest = _closest_theme_candidates(str(theme_input), candidates)
+            record(
+                "theme",
+                False,
+                f"主题 '{theme_input}' 未命中固定维度表。最接近的候选: {closest}",
+            )
+        else:
+            record("theme", True)
+
+    # ── Chapter presence checks ──
+    required_chapters = {
+        "preface": "前言",
+        "project_background": "项目背景",
+    }
+    for key, label in required_chapters.items():
+        paragraphs = content.get(key, [])
+        record(
+            key,
+            bool(paragraphs and any(str(p).strip() for p in paragraphs)),
+            f"缺少 {label} 章节（{key}）正文",
+        )
+
+    result_analysis = content.get("result_analysis", [])
+    record(
+        "result_analysis",
+        bool(result_analysis),
+        "缺少 问卷结果分析(4.x) 章节正文",
+    )
+
+    grouped = None
+    if questionnaire:
+        try:
+            ai_dimensions = None
+            if theme_entry:
+                ai_dimensions = fixed_dimensions_to_ai(theme_entry, questionnaire)
+            elif meta:
+                ai_dimensions = parse_dimensions_from_meta(meta)
+            grouped = cluster_dimensions(questionnaire, ai_dimensions=ai_dimensions)
+        except ValueError as exc:
+            record("dimension_grouping", False, f"维度结构解析失败: {exc}")
+
+    if result_analysis and grouped:
+        try:
+            validate_content_structure(content, grouped)
+            record("result_analysis_structure", True)
+        except ValueError as exc:
+            record("result_analysis_structure", False, str(exc))
+
+        drafted_by_sn = {
+            section.get("section_number"): section
+            for section in result_analysis
+        }
+        for expected_section in grouped.get("sections", []):
+            sn = expected_section.get("section_number", "?")
+            drafted_section = drafted_by_sn.get(sn)
+            if not drafted_section:
+                record(f"{sn}_section", False, f"缺少 {sn} {expected_section.get('section_title', '')} 章节")
+                continue
+            drafted_subtopics = drafted_section.get("subtopics", [])
+            for index, expected_subtopic in enumerate(expected_section.get("subtopics", [])):
+                subtitle = expected_subtopic.get("subtitle", "")
+                question_ref = next(iter(expected_subtopic.get("question_refs", [])), "")
+                if index >= len(drafted_subtopics):
+                    record(
+                        f"{sn}_{question_ref}",
+                        False,
+                        f"{sn} / {question_ref} / {subtitle} 缺少 AI 分析正文",
+                    )
+                    continue
+                try:
+                    require_ai_analysis_paragraphs(
+                        drafted_subtopics[index].get("paragraphs", []),
+                        section_number=sn,
+                        question_ref=question_ref,
+                        subtitle=subtitle,
+                    )
+                    record(f"{sn}_{question_ref}", True)
+                except ValueError as exc:
+                    record(f"{sn}_{question_ref}", False, str(exc))
+    elif result_analysis:
+        for section in result_analysis:
+            sn = section.get("section_number", "?")
+            st_title = section.get("section_title", "")
+            subtopics = section.get("subtopics", [])
+            if not subtopics:
+                record(f"{sn}_section", False, f"{sn} {st_title} 缺少小标题和分析正文")
+            for subtopic in subtopics:
+                subtitle = subtopic.get("subtitle", subtopic.get("title", ""))
+                paragraphs = subtopic.get("paragraphs", [])
+                if not paragraphs or not any(str(p).strip() for p in paragraphs):
+                    record(f"{sn}_{subtitle}", False, f"{sn} / {subtitle} 缺少 AI 分析正文")
+
+    summary = content.get("summary", {})
+    key_issue = summary.get("key_issue_analysis", [])
+    record(
+        "key_issue_analysis",
+        bool(key_issue and any(str(p).strip() for p in key_issue)),
+        "缺少 5.1 问卷重点问题分析正文",
+    )
+
+    overall = summary.get("overall_analysis", [])
+    record(
+        "overall_analysis",
+        bool(overall and any(str(p).strip() for p in overall)),
+        "缺少 5.2 调研结果总结正文",
+    )
+
+    recs = summary.get("recommendations", [])
+    recs_present = bool(recs and any(str(p).strip() for p in recs))
+    record("recommendations", recs_present, "缺少 5.3 建议正文")
+    if recs_present and not any(re.match(r"^\s*\d+\.", str(item).strip()) for item in recs):
+        record("recommendations_numbered_items", False, "5.3 建议缺少编号条目")
+
+    # ── Cross-check key_issue_question_refs against actual sections ──
+    if parsed_refs and grouped:
+        assigned_refs = {
+            ref
+            for section in grouped.get("sections", [])
+            for subtopic in section.get("subtopics", [])
+            for ref in subtopic.get("question_refs", [])
+        }
+        for ref in parsed_refs:
+            record(
+                f"key_issue_ref_{ref}",
+                ref in assigned_refs,
+                f"key_issue_question_refs 中的 '{ref}' 未在 4.x 真实分组中找到对应分析",
+            )
+    elif parsed_refs and result_analysis:
+        assigned_refs = {
+                ref
+                for section in result_analysis
+                for subtopic in section.get("subtopics", [])
+                for ref in subtopic.get("question_refs", [])
+        }
+        for ref in parsed_refs:
+            record(
+                f"key_issue_ref_{ref}",
+                ref in assigned_refs,
+                f"key_issue_question_refs 中的 '{ref}' 未出现在 4.x 分析章节中",
+            )
+
+    result = {
+        "status": "failed" if errors else "passed",
+        "errors": errors,
+        "warnings": warnings,
+        "checks": checks,
+    }
+    if errors:
+        raise PreflightError(errors, result)
+    return result
+
+
 def build_programmatic_recommendations(product: str, region: str) -> list[str]:
     return [
         normalize_space(
@@ -1216,10 +1541,12 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             ai_st = ai_st_by_idx.get(st_idx, {})
 
             subtitle = ai_st.get("subtitle") or st.get("subtitle", "")
-            fallback_analysis = default_subtopic_paragraph(qmap[refs[0]], analysis_style_index) if refs else []
-            analysis = choose_analysis_paragraphs(
+            question_ref_label = refs[0] if refs else "unknown"
+            analysis = require_ai_analysis_paragraphs(
                 ai_st.get("paragraphs", []),
-                fallback_analysis,
+                section_number=section_number,
+                question_ref=question_ref_label,
+                subtitle=subtitle,
             )
             analysis_style_index += 1
 

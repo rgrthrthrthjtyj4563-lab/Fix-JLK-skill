@@ -10,12 +10,12 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from .build_payload import build_payload, parse_markdown_content, validate_payload
+    from .build_payload import build_payload, parse_markdown_content, validate_payload, PreflightError, preflight_report_content, load_dimension_library
     from .final_validate_docx import FinalValidationError, validate_docx
     from .parse_questionnaire import parse_sheet
     from .render_from_template import TemplateRenderer
 except ImportError:
-    from build_payload import build_payload, parse_markdown_content, validate_payload
+    from build_payload import build_payload, parse_markdown_content, validate_payload, PreflightError, preflight_report_content, load_dimension_library
     from final_validate_docx import FinalValidationError, validate_docx
     from parse_questionnaire import parse_sheet
     from render_from_template import TemplateRenderer
@@ -82,6 +82,27 @@ def main() -> None:
     questionnaire_json.write_text(json.dumps(questionnaire, ensure_ascii=False, indent=2), encoding="utf-8")
 
     meta, content = parse_markdown_content(report_content_path)
+
+    # ── Preflight: validate draft completeness before expensive build ──
+    library = load_dimension_library()
+    try:
+        preflight_result = preflight_report_content(
+            meta, content,
+            library=library,
+            questionnaire=questionnaire,
+        )
+    except PreflightError as exc:
+        print(str(exc), file=sys.stderr)
+        print(f"Run directory retained for diagnosis: {run_dir.resolve()}", file=sys.stderr)
+        # Save preflight results for debugging
+        preflight_json = run_dir / "preflight.json"
+        preflight_json.write_text(json.dumps(exc.result, ensure_ascii=False, indent=2), encoding="utf-8")
+        sys.exit(1)
+
+    # Save preflight success alongside other artifacts
+    preflight_json = run_dir / "preflight.json"
+    preflight_json.write_text(json.dumps(preflight_result, ensure_ascii=False, indent=2), encoding="utf-8")
+
     payload = build_payload(questionnaire, meta, content, args)
     validate_payload(payload)
 
