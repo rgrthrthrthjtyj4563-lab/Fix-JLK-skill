@@ -765,6 +765,14 @@ def key_issue_chart_title(question: dict) -> str:
     return question.get("question", "重点问题")
 
 
+def key_issue_chart_title_from_subtitle(subtitle: str, question: dict) -> str:
+    cleaned = normalize_space(subtitle)
+    cleaned = re.sub(r"^（\d+）\s*", "", cleaned)
+    cleaned = re.sub(r"[（(]\s*多选\s*[）)]", "", cleaned)
+    cleaned = re.sub(r"分析$", "", cleaned).strip()
+    return cleaned or key_issue_chart_title(question)
+
+
 def build_key_issue_paragraph(question: dict, region: str, product: str) -> str:
     options = sorted(
         question.get("options", []),
@@ -923,12 +931,13 @@ def _parse_key_issue_question_refs(meta: dict, qmap: dict, result_sections: list
     return normalized
 
 
-def select_key_issue_questions_by_refs(question_refs: list[str], qmap: dict) -> list[dict]:
+def select_key_issue_questions_by_refs(question_refs: list[str], qmap: dict, subtitle_by_ref: dict[str, str] | None = None) -> list[dict]:
+    subtitle_by_ref = subtitle_by_ref or {}
     return [
         {
             "question_ref": ref,
             "heading": key_issue_heading(qmap[ref]),
-            "chart_title": key_issue_chart_title(qmap[ref]),
+            "chart_title": key_issue_chart_title_from_subtitle(subtitle_by_ref.get(ref, ""), qmap[ref]),
             "question": qmap[ref],
         }
         for ref in question_refs
@@ -1242,7 +1251,13 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
         })
 
     key_issue_question_refs = _parse_key_issue_question_refs(meta, qmap, result_sections)
-    key_issue_questions = select_key_issue_questions_by_refs(key_issue_question_refs, qmap)
+    subtitle_by_ref = {
+        ref: subtopic.get("subtitle", "")
+        for section in result_sections
+        for subtopic in section.get("subtopics", [])
+        for ref in subtopic.get("question_refs", [])
+    }
+    key_issue_questions = select_key_issue_questions_by_refs(key_issue_question_refs, qmap, subtitle_by_ref)
     key_issue_items = [
         {
             "question_ref": item["question_ref"],
@@ -1356,7 +1371,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "recommendations_programmatic": programmatic_recommendations,
         },
         "attachments": {
-            "attachment1_name": cli_args.attachment_name or meta.get("attachment_name") or "问卷调查附件",
+            "attachment1_name": cli_args.attachment_name or meta.get("attachment_name") or theme or "问卷调查附件",
             "attachment1_questions": attachment_questions,
             "attachment2_name": "问卷调查明细表",
         },

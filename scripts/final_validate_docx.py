@@ -24,7 +24,12 @@ FORBIDDEN_ANALYSIS_PATTERNS = [
     r"逐项分布",
     r"从共性特征看",
     r"建议",
+    r"当前题目",
+    r"尾部反馈",
+    r"当前反馈",
+    r"该题目",
 ]
+NUMERIC_PERCENT_PATTERN = r"\d+(?:\.\d+)?[%％]"
 
 
 class FinalValidationError(ValueError):
@@ -92,7 +97,11 @@ def _validate_analysis_paragraphs(texts: list[str], payload: dict) -> None:
     for text in texts[result_start + 1:result_end]:
         for pattern in FORBIDDEN_ANALYSIS_PATTERNS:
             if re.search(pattern, text):
+                if pattern in {r"当前题目", r"尾部反馈", r"当前反馈", r"该题目"}:
+                    raise FinalValidationError("Forbidden degraded analysis wording in result-analysis section.")
                 raise FinalValidationError("Forbidden old-style analysis text in result-analysis section.")
+        if 200 <= len(text) <= 350 and not re.search(NUMERIC_PERCENT_PATTERN, text):
+            raise FinalValidationError("Analysis paragraph lacks numeric percentage in result-analysis section.")
 
     for section in payload["result_analysis"]["sections"]:
         for subtopic in section.get("subtopics", []):
@@ -101,7 +110,11 @@ def _validate_analysis_paragraphs(texts: list[str], payload: dict) -> None:
                     raise FinalValidationError(f"Missing result-analysis paragraph for subtitle: {subtopic.get('subtitle', '')}")
                 for pattern in FORBIDDEN_ANALYSIS_PATTERNS:
                     if re.search(pattern, paragraph):
+                        if pattern in {r"当前题目", r"尾部反馈", r"当前反馈", r"该题目"}:
+                            raise FinalValidationError(f"Forbidden degraded analysis wording after subtitle: {subtopic.get('subtitle', '')}")
                         raise FinalValidationError(f"Forbidden old-style analysis text after subtitle: {subtopic.get('subtitle', '')}")
+                if not re.search(NUMERIC_PERCENT_PATTERN, paragraph):
+                    raise FinalValidationError(f"Analysis paragraph lacks numeric percentage after subtitle: {subtopic.get('subtitle', '')}")
                 if len(paragraph) < MIN_ANALYSIS_CHARS or len(paragraph) > MAX_ANALYSIS_CHARS:
                     raise FinalValidationError(f"Analysis paragraph length invalid after subtitle: {subtopic.get('subtitle', '')}")
 
@@ -141,9 +154,12 @@ def _attachment_question_text(display_index: int, question_text: str) -> str:
 
 def _validate_attachment1(texts: list[str], payload: dict) -> None:
     attachment_name = payload.get("attachments", {}).get("attachment1_name", "问卷调查附件")
-    start = next((i for i, text in enumerate(texts) if text == f"附件1：{attachment_name}" or text.startswith("附件1：")), None)
+    expected_heading = f"附件1：{attachment_name}"
+    start = next((i for i, text in enumerate(texts) if text.startswith("附件1：")), None)
     if start is None:
         raise FinalValidationError("Missing attachment 1 heading.")
+    if texts[start] != expected_heading:
+        raise FinalValidationError(f"Attachment 1 heading mismatch. expected={expected_heading}, actual={texts[start]}")
     end = _find_text_index(texts, "附件2：问卷调查明细表", start + 1)
     body = texts[start + 1:end]
     if any(re.match(r"^\d+[\.．、]", text) for text in body):
@@ -423,6 +439,40 @@ def _validate_font_xml(docx_path: Path) -> None:
             raise FinalValidationError(f"Unexpected font in visible text run: {values}")
 
 
+def _validate_disclaimer_heading_xml(docx_path: Path) -> None:
+    root, ns = _document_xml_root(docx_path)
+    for paragraph in root.findall(".//w:p", ns):
+        if _paragraph_text(paragraph, ns) != "免责申明":
+            continue
+        jc = paragraph.find("./w:pPr/w:jc", ns)
+        if jc is None or jc.get(f"{{{ns['w']}}}val") != "center":
+            raise FinalValidationError("Disclaimer heading must be centered.")
+        visible_runs = [
+            run for run in paragraph.findall("w:r", ns)
+            if "".join(node.text or "" for node in run.findall("w:t", ns)).strip()
+        ]
+        if not visible_runs:
+            raise FinalValidationError("Disclaimer heading has no visible runs.")
+        for run in visible_runs:
+            rpr = run.find("w:rPr", ns)
+            fonts = rpr.find("w:rFonts", ns) if rpr is not None else None
+            sz = rpr.find("w:sz", ns) if rpr is not None else None
+            bold = rpr.find("w:b", ns) if rpr is not None else None
+            font_values = [
+                fonts.get(f"{{{ns['w']}}}ascii") if fonts is not None else None,
+                fonts.get(f"{{{ns['w']}}}hAnsi") if fonts is not None else None,
+                fonts.get(f"{{{ns['w']}}}eastAsia") if fonts is not None else None,
+            ]
+            if any(value != EXPECTED_FONT for value in font_values):
+                raise FinalValidationError(f"Disclaimer heading font must be {EXPECTED_FONT}.")
+            if sz is None or sz.get(f"{{{ns['w']}}}val") != "32":
+                raise FinalValidationError("Disclaimer heading must use 16pt font size.")
+            if bold is None or bold.get(f"{{{ns['w']}}}val") == "0":
+                raise FinalValidationError("Disclaimer heading must be bold.")
+        return
+    raise FinalValidationError("Missing disclaimer heading.")
+
+
 def _validate_subtitle_formality(payload: dict) -> None:
     ORAL_INDICATORS = [
         r"^(您|你|我|他|她|它|咱们|大家)",
@@ -464,6 +514,7 @@ def validate_docx(docx_path: Path, payload: dict) -> None:
     _validate_subtopic_numbering_xml(docx_path)
     _validate_png_chart_layout(docx_path, payload)
     _validate_font_xml(docx_path)
+    _validate_disclaimer_heading_xml(docx_path)
 
 
 def main() -> None:
