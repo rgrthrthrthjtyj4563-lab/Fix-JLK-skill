@@ -33,14 +33,14 @@ OPENING_STYLE_LIBRARY = [
     "从高频反馈集中度看",
     "围绕本题所反映的用药场景看",
     "从主次反馈关系看",
-    "结合尾部反馈情况看",
+    "结合低频反馈情况看",
     "从患者实际选择分布看",
     "以主要反馈项为观察切入点看",
     "从本题所呈现的行为信号看",
     "结合主要选项与次要选项差异看",
     "从患者认知或执行差异看",
     "围绕该问题暴露出的管理环节看",
-    "从当前反馈的集中与分散程度看",
+    "从样本反馈的集中与分散程度看",
 ]
 
 INTERPRETATION_STYLE_LIBRARY = [
@@ -154,9 +154,9 @@ def _topic_label(question_text: str, question_type: str) -> str:
         "convenience": "使用便利性",
         "information": "信息理解与支持",
         "efficacy": "疗效表现",
-        "generic": "当前题目反馈",
+        "generic": "样本反馈特征",
     }
-    return fallback.get(question_type, "当前题目反馈")
+    return fallback.get(question_type, "样本反馈特征")
 
 
 def _sorted_options(options: list[dict]) -> list[dict]:
@@ -219,7 +219,7 @@ def _main_conclusion(question_type: str, topic_label: str, options: list[dict], 
         )
     return (
         f"{opening}，{topic_label}的主流反馈集中在{top_phrase}和{second_phrase}，"
-        f"对应比例分别为{top_pct}和{second_pct}，说明该题目已经形成较明确的患者判断，"
+        f"对应比例分别为{top_pct}和{second_pct}，说明样本反馈已经形成较明确的患者判断，"
         "整体趋势较为清晰。"
     )
 
@@ -239,7 +239,7 @@ def _interpretation(question_type: str, topic_label: str, options: list[dict], s
         "economy": f"从长期治疗视角看，这意味着产品价值判断并未因价格被明显削弱，但对负担更敏感的人群仍可能因成本感知波动而影响持续购药意愿。",
         "convenience": f"这一分布说明当前设计基本贴合多数患者的生活节奏，但少数边缘反馈也提示，实际使用中的细节痛点尚未被完全消化。",
         "information": f"这表明患者对基础说明内容已有一定理解，但在更复杂的用药疑问、长期管理细节或风险识别方面，仍可能存在支持深度不足的问题。",
-        "generic": f"同时，尾部反馈集中在{tail_phrase}一类低频项，说明边缘场景仍然存在，需要在后续服务中持续跟踪。"
+        "generic": f"同时，低频反馈集中在{tail_phrase}一类选项，说明边缘场景仍然存在，需要在后续服务中持续跟踪。"
     }
     body = interpretations.get(question_type, interpretations["generic"])
     template = _style_item(INTERPRETATION_STYLE_LIBRARY, style_index, offset=1)

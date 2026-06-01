@@ -45,7 +45,8 @@
 - All chapter 4 elements (section headings, subtitles, analysis paragraphs) must have `pageBreakBefore`; subtitles must also have `keepNext`.
 - Each subtitle corresponds to exactly 1 question (cluster_dimensions auto-splits multi-question subtopics). Analysis paragraph must be a single paragraph between `250-300` Chinese characters.
 - Analysis logic must follow `主结论 -> 解释/风险 -> 收束`; avoid rigid procedural connectors.
-- Analysis body must not contain percentages, `占比`, `A/B/C/D`, `选项A/选项B`, `逐项分布`, `从共性特征看`, `建议`, or mechanical option-by-option enumeration.
+- Analysis body must include numeric percentage expressions such as `39.13%` where option distribution is discussed.
+- Analysis body must not contain `A/B/C/D`, `选项A/选项B`, `逐项分布`, `从共性特征看`, `当前题目`, `尾部反馈`, `当前反馈`, `该题目`, `建议`, or mechanical option-by-option enumeration.
 - `5.1问卷重点问题分析` must keep two native `3D` pie charts for the selected key issues.
 - `5.1` and the `问卷结果分析` overview charts must coexist; restoring `5.1` charts must not delete or repurpose the two overview chart slots.
 - Do not output the old `引言 / 数据信息分析 / 反馈意见分析 / 综合分析与建议 / 附件-问卷题目内容` system.

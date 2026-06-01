@@ -426,6 +426,29 @@ def copy_docx_with_document_xml_replace(source: Path, target: Path, old: str, ne
             dst.writestr(item, data)
 
 
+def copy_docx_with_disclaimer_size(source: Path, target: Path, size: str) -> None:
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    with ZipFile(source) as src, ZipFile(target, "w") as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename == "word/document.xml":
+                root = ET.fromstring(data)
+                for paragraph in root.findall(".//w:p", ns):
+                    text = "".join(node.text or "" for node in paragraph.findall(".//w:t", ns)).strip()
+                    if text != "免责申明":
+                        continue
+                    for run in paragraph.findall(".//w:r", ns):
+                        rpr = run.find("w:rPr", ns)
+                        if rpr is None:
+                            rpr = ET.SubElement(run, f"{{{ns['w']}}}rPr")
+                        sz = rpr.find("w:sz", ns)
+                        if sz is None:
+                            sz = ET.SubElement(rpr, f"{{{ns['w']}}}sz")
+                        sz.set(f"{{{ns['w']}}}val", size)
+                data = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+            dst.writestr(item, data)
+
+
 def chart_refs_between(docx_path: Path, start_text: str, end_text: str) -> list[str]:
     ns = {
         "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
@@ -597,8 +620,8 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(len(payload["summary"]["key_issue_items"]), 2)
         self.assertEqual(payload["summary"]["key_issue_items"][0]["heading"], "1. 血压控制现状与特征")
         self.assertEqual(payload["summary"]["key_issue_items"][1]["heading"], "2. 不良反应发生率")
-        self.assertEqual(payload["summary"]["key_issue_items"][0]["chart_title"], "患者血压控制效果")
-        self.assertEqual(payload["summary"]["key_issue_items"][1]["chart_title"], "不良反应发生率")
+        self.assertEqual(payload["summary"]["key_issue_items"][0]["chart_title"], "血压控制效果")
+        self.assertEqual(payload["summary"]["key_issue_items"][1]["chart_title"], "头晕头痛不良反应")
         self.assertEqual(payload["summary"]["key_issue_items"][0]["chart_type"], "pie")
         self.assertEqual(payload["summary"]["key_issue_items"][1]["chart_type"], "pie")
         self.assertEqual([item["question_ref"] for item in payload["summary"]["key_issue_items"]], ["q01", "q02"])
@@ -624,6 +647,9 @@ class PipelineTest(unittest.TestCase):
             self.assertNotIn("选项A", paragraphs[0])
             self.assertNotIn("选项B", paragraphs[0])
             self.assertNotIn("逐项分布", paragraphs[0])
+            self.assertNotIn("当前题目", paragraphs[0])
+            self.assertNotIn("尾部反馈", paragraphs[0])
+            self.assertNotIn("当前反馈", paragraphs[0])
             self.assertTrue(any(marker in paragraphs[0] for marker in ["表明", "说明", "反映", "提示"]))
             self.assertTrue(any(marker in paragraphs[0] for marker in ["需", "仍", "可见", "整体", "进一步"]))
 
@@ -636,6 +662,32 @@ class PipelineTest(unittest.TestCase):
         self.assertGreaterEqual(len(OPENING_STYLE_LIBRARY), 15)
         self.assertFalse(all(paragraph.startswith("从当前题目反馈分布看") for paragraph in analysis_paragraphs))
         self.assertGreaterEqual(len(set(openings)), int(len(openings) * 0.7))
+
+    def test_attachment_name_defaults_to_theme_without_changing_report_title(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            theme = "患者用药疗效"
+            markdown = sample_markdown().replace("---\nproduct:", f"---\ntheme: {theme}\nproduct:")
+            markdown = re.sub(r"^attachment_name: .*\n", "", markdown, flags=re.MULTILINE)
+            report_content.write_text(markdown, encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+            self.assertEqual(payload["attachments"]["attachment1_name"], theme)
+            self.assertEqual(payload["report_title"], f"{theme}问卷调研分析报告")
 
     def test_theme_replaces_report_title_and_header(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -992,6 +1044,10 @@ class PipelineTest(unittest.TestCase):
             )
             disclaimer_unit = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == f"服务提供单位:{payload['service']['unit']}")
             self.assertEqual(disclaimer_heading.alignment, 1)
+            self.assertTrue(disclaimer_heading.runs)
+            self.assertEqual(disclaimer_heading.runs[0].font.name, "宋体")
+            self.assertEqual(disclaimer_heading.runs[0].font.size.pt, 16)
+            self.assertTrue(disclaimer_heading.runs[0].bold)
             self.assertEqual(disclaimer_item.alignment, 3)
             self.assertEqual(disclaimer_item.paragraph_format.first_line_indent, 0)
             self.assertEqual(disclaimer_unit.alignment, 2)
@@ -1247,6 +1303,18 @@ class PipelineTest(unittest.TestCase):
             with self.assertRaisesRegex(FinalValidationError, "Forbidden old-style analysis"):
                 validate_docx(old_style_docx, payload)
 
+            degraded_text_docx = Path(temp_dir) / "degraded-text.docx"
+            degraded_text = first_paragraph.replace("从反馈结构看", "从当前题目反馈分布看", 1)
+            copy_docx_with_document_xml_replace(output_docx, degraded_text_docx, first_paragraph, degraded_text)
+            with self.assertRaisesRegex(FinalValidationError, "degraded analysis wording"):
+                validate_docx(degraded_text_docx, payload)
+
+            no_pct_docx = Path(temp_dir) / "no-pct.docx"
+            no_pct = re.sub(r"\d+(?:\.\d+)?%", "较高比例", first_paragraph)
+            copy_docx_with_document_xml_replace(output_docx, no_pct_docx, first_paragraph, no_pct)
+            with self.assertRaisesRegex(FinalValidationError, "numeric percentage"):
+                validate_docx(no_pct_docx, payload)
+
             attachment_docx = Path(temp_dir) / "bad-attachment.docx"
             copy_docx_with_document_xml_replace(
                 output_docx,
@@ -1256,6 +1324,21 @@ class PipelineTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(FinalValidationError, "raw numeric question prefixes|question order mismatch"):
                 validate_docx(attachment_docx, payload)
+
+            attachment_heading_docx = Path(temp_dir) / "bad-attachment-heading.docx"
+            copy_docx_with_document_xml_replace(
+                output_docx,
+                attachment_heading_docx,
+                f"附件1：{payload['attachments']['attachment1_name']}",
+                "附件1：问卷调查附件",
+            )
+            with self.assertRaisesRegex(FinalValidationError, "Attachment 1 heading mismatch"):
+                validate_docx(attachment_heading_docx, payload)
+
+            disclaimer_size_docx = Path(temp_dir) / "bad-disclaimer-size.docx"
+            copy_docx_with_disclaimer_size(output_docx, disclaimer_size_docx, "28")
+            with self.assertRaisesRegex(FinalValidationError, "Disclaimer heading"):
+                validate_docx(disclaimer_size_docx, payload)
 
             font_docx = Path(temp_dir) / "bad-font.docx"
             copy_docx_with_document_xml_replace(output_docx, font_docx, "宋体", "SimSun", count=1000)
@@ -1356,6 +1439,45 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(grouped["dimension_count"], 0)
         self.assertEqual(grouped["sections"], [])
         self.assertEqual(grouped["project_dimensions"], [])
+
+    def test_fixed_dimensions_include_jiudian_luosuoluofen_themes(self) -> None:
+        library = load_dimension_library()
+        theme_entry = resolve_theme(
+            {},
+            {"theme": "洛索洛芬钠凝胶贴膏价格敏感度调研-患者"},
+            Namespace(theme=None),
+            library,
+        )
+        self.assertIsNotNone(theme_entry)
+        self.assertEqual(len(library["themes"]), 24)
+        self.assertEqual([dim["name"] for dim in theme_entry["dimensions"]], [
+            "价格感知与效果匹配",
+            "价格变动影响",
+            "用药决策与使用方式类",
+            "价格决策权重与替代选择",
+        ])
+
+        questionnaire = {
+            "question_count": 14,
+            "questions": [
+                {"number": number, "question": f"第{number}题", "options": []}
+                for number in range(3, 15)
+            ],
+        }
+        ai_dimensions = fixed_dimensions_to_ai(theme_entry, questionnaire)
+        grouped = cluster_dimensions(questionnaire, ai_dimensions=ai_dimensions)
+        section_refs = {
+            section["section_number"]: [
+                ref
+                for subtopic in section["subtopics"]
+                for ref in subtopic["question_refs"]
+            ]
+            for section in grouped["sections"]
+        }
+        self.assertEqual(section_refs["4.1"], ["q03", "q04"])
+        self.assertEqual(section_refs["4.2"], ["q05", "q09", "q12"])
+        self.assertEqual(section_refs["4.3"], ["q06", "q07", "q08", "q10", "q11"])
+        self.assertEqual(section_refs["4.4"], ["q13", "q14"])
 
     def test_ai_dimensions_build_payload_integration(self) -> None:
         ai_dimensions = dynamic_ai_dimensions()

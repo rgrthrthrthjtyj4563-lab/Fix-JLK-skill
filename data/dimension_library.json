@@ -1670,6 +1670,745 @@
           ]
         }
       ]
+    },
+    {
+      "theme_name": "洛索洛芬钠凝胶贴膏价格敏感度调研-患者",
+      "dimensions": [
+        {
+          "name": "价格感知与效果匹配",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "首次购买时对价格的第一感受"
+            },
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "当前价格与止痛效果的匹配度"
+            }
+          ]
+        },
+        {
+          "name": "价格变动影响",
+          "subtopics": [
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "价格上涨10%-20%对购买意愿的影响"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "价格下降时是否会推荐给身边有需要的人"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "未来价格是否有下调空间"
+            }
+          ]
+        },
+        {
+          "name": "用药决策与使用方式类",
+          "subtopics": [
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "与其他同类外用镇痛贴膏的价格/性价比对比"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "医保报销比例提高对使用频率的影响"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "包装设计（便携性、密封性）对价格的影响"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "是否应根据不同地区（城市/农村）调整价格"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "新竞品效果相近但价格低 20% 时是否尝试"
+            }
+          ]
+        },
+        {
+          "name": "价格决策权重与替代选择",
+          "subtopics": [
+            {
+              "question_numbers": [
+                13
+              ],
+              "subtitle": "是否因价格问题用物理方式（热敷、按摩）替代用药"
+            },
+            {
+              "question_numbers": [
+                14
+              ],
+              "subtitle": "价格因素在选择时的重要程度"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "洛索洛芬钠凝胶贴膏的用药体验与疗效反馈调研问卷-患者",
+      "dimensions": [
+        {
+          "name": "使用目的维度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "患者用药的具体目的"
+            }
+          ]
+        },
+        {
+          "name": "使用方式维度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "患者使用该凝胶贴膏的习惯和偏好"
+            }
+          ]
+        },
+        {
+          "name": "疗效感受维度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "了解患者对产品镇痛时长的实际感受"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "衡量产品对患者日常生活的实际改善程度"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "了解本品在市场同类产品中的疗效竞争力"
+            }
+          ]
+        },
+        {
+          "name": "产品体验维度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "了解患者对产品粘性表现及满意度"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "了解患者使用过程中皮肤反应情况"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "产品使用的便捷性及贴敷位置时的难易程度"
+            }
+          ]
+        },
+        {
+          "name": "用户反馈维度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "患者与专业医疗人员的互动情况以及对用药建议的获取情况"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "收集用户在实际使用过程中的经验和建议"
+            }
+          ]
+        },
+        {
+          "name": "替代效果维度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                13
+              ],
+              "subtitle": "了解该凝胶贴膏对口服止痛药的替代效果"
+            }
+          ]
+        },
+        {
+          "name": "改进需求维度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                14
+              ],
+              "subtitle": "患者对产品改进的期望和需求"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "洛索洛芬钠凝胶贴膏疾病认知水平-患者",
+      "dimensions": [
+        {
+          "name": "疾病基础知识认知",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "骨骼肌肉系统疾病致病因素认知程度"
+            },
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "不良姿势与骨骼肌肉疾病关联性认知"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "关节疼痛与炎症关联性判断"
+            }
+          ]
+        },
+        {
+          "name": "疾病风险后果认知",
+          "subtopics": [
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "骨骼肌肉疾病未干预后果认知"
+            },
+            {
+              "question_numbers": [
+                13
+              ],
+              "subtitle": "长期关节疼痛潜在影响认知程度"
+            }
+          ]
+        },
+        {
+          "name": "药品专业知识认知",
+          "subtopics": [
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "洛索洛芬钠凝胶贴膏适用人群了解度"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "外用贴膏与口服止痛药优势对比认知"
+            },
+            {
+              "question_numbers": [
+                15
+              ],
+              "subtitle": "洛索洛芬钠凝胶贴膏起效时间认知"
+            },
+            {
+              "question_numbers": [
+                16
+              ],
+              "subtitle": "外用镇痛贴膏禁忌人群认知程度"
+            }
+          ]
+        },
+        {
+          "name": "用药行为与偏好",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "肌肉酸痛首选缓解方式选择"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "外用贴膏使用核心关注点"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "药品关联疾病知识主动学习习惯"
+            }
+          ]
+        },
+        {
+          "name": "用药操作规范与信息获取",
+          "subtopics": [
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "洛索洛芬钠凝胶贴膏信息获取渠道"
+            },
+            {
+              "question_numbers": [
+                14
+              ],
+              "subtitle": "外用贴膏使用前皮肤清洁认知"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "洛索洛芬钠凝胶贴膏合理用药调查-患者",
+      "dimensions": [
+        {
+          "name": "药品基础认知",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "首次使用前对药品镇痛类型的了解程度"
+            },
+            {
+              "question_numbers": [
+                13
+              ],
+              "subtitle": "合理用药知识掌握程度的综合自评"
+            }
+          ]
+        },
+        {
+          "name": "用药操作规范",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "贴敷时对皮肤异常区域的规避情况"
+            },
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "对药品每日推荐使用次数的知晓与执行"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "贴敷期间对避开水的知晓与执行"
+            }
+          ]
+        },
+        {
+          "name": "用药安全防护",
+          "subtopics": [
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "与其他外用药物联用时的处理方式"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "使用前阅读说明书“不良反应”的习惯"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "与口服非甾体抗炎药联用风险的了解程度"
+            }
+          ]
+        },
+        {
+          "name": "药品管理规范",
+          "subtopics": [
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "贴敷前对药品保质期的确认习惯"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "购买时向药师咨询使用注意事项的频率"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "药品储存对说明书要求的遵循情况"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "洛索洛芬钠凝胶贴膏品牌知名度调研-患者",
+      "dimensions": [
+        {
+          "name": "信息获取与品牌认知维度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "首次了解产品的主要渠道"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "对同类竞品品牌的认知程度"
+            },
+            {
+              "question_numbers": [
+                15
+              ],
+              "subtitle": "近期接触产品相关信息的频率"
+            }
+          ]
+        },
+        {
+          "name": "产品识别与印象维度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "产品包装识别速度"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "产品品牌形象定位认知"
+            }
+          ]
+        },
+        {
+          "name": "适用场景与专业认知维度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "产品适用人群认知"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "对药品类别（非甾体抗炎药）的认知程度"
+            }
+          ]
+        },
+        {
+          "name": "购买行为与偏好维度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "选择此类药品的核心影响因素"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "与其他止痛贴膏相比的突出特点"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "产品购买渠道偏好"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "产品价格定位认知"
+            },
+            {
+              "question_numbers": [
+                13
+              ],
+              "subtitle": "产品推荐意愿"
+            }
+          ]
+        },
+        {
+          "name": "品牌发展与需求维度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                14
+              ],
+              "subtitle": "选对用药指导的需求程度"
+            },
+            {
+              "question_numbers": [
+                16
+              ],
+              "subtitle": "品牌未来优先加强的工作方向"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "洛索洛芬钠凝胶贴膏依从性与用药习惯-患者",
+      "dimensions": [
+        {
+          "name": "用药依从性执行",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "贴敷时间依从性"
+            },
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "每日使用频次"
+            },
+            {
+              "question_numbers": [
+                13
+              ],
+              "subtitle": "疗程完成依从性"
+            }
+          ]
+        },
+        {
+          "name": "用药操作规范性",
+          "subtopics": [
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "使用前是否清洁贴敷部位皮肤"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "是否遵守相关使用禁忌"
+            },
+            {
+              "question_numbers": [
+                15
+              ],
+              "subtitle": "是否定期观察贴敷部位皮肤情况"
+            }
+          ]
+        },
+        {
+          "name": "产品使用体验",
+          "subtopics": [
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "贴敷粘性对日常活动的影响"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "贴敷舒适度评价"
+            },
+            {
+              "question_numbers": [
+                14
+              ],
+              "subtitle": "包装开启便利性评价"
+            }
+          ]
+        },
+        {
+          "name": "用药影响因素",
+          "subtopics": [
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "使用禁忌遵守情况"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "痛缓解后停药行为习惯"
+            }
+          ]
+        },
+        {
+          "name": "用药行为习惯维度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "疼痛缓解后停药行为"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "用药后效果反馈与调整行为"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "洛索洛芬钠凝胶贴膏产品满意度调研-患者",
+      "dimensions": [
+        {
+          "name": "疼痛缓解效果",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "本品缓解疼痛或不适症状的速度"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "贴膏药物持续作用时间（止痛效果维持时长）满意度"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "您贴膏整体症状改善效果的满意度"
+            },
+            {
+              "question_numbers": [
+                14
+              ],
+              "subtitle": "贴膏对夜间疼痛的缓解效果"
+            }
+          ]
+        },
+        {
+          "name": "使用舒适度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "贴膏使用过程中对皮肤的安全性"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "患者对贴膏气味的接受度"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "贴膏贴敷期间对用户正常肢体活动（如弯曲关节）的影响程度"
+            },
+            {
+              "question_numbers": [
+                15
+              ],
+              "subtitle": "贴膏的厚度舒适感"
+            }
+          ]
+        },
+        {
+          "name": "产品特性",
+          "subtopics": [
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "贴膏在皮肤表面的贴合稳定性"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "贴膏的尺寸和形状与用户实际贴敷部位的适配性"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "患者对贴膏黏性持续时间满意度"
+            },
+            {
+              "question_numbers": [
+                13
+              ],
+              "subtitle": "贴膏提前取下后皮肤残留药膏痕迹的情况"
+            }
+          ]
+        },
+        {
+          "name": "长期使用体验",
+          "subtopics": [
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "长期使用情况下贴膏的效果稳定性"
+            }
+          ]
+        }
+      ]
     }
   ]
 }
