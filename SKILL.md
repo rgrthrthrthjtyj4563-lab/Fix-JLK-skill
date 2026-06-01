@@ -87,6 +87,33 @@ description: "Use when generating patient questionnaire analysis reports for pha
 10. `scripts/build_payload.py` 会对 `前言`、`项目背景` 和 `问卷结果分析` 单题正文执行硬校验；段数、字数、区域信息、结构、数字百分比呈现或旧式机械分析不达标时，pipeline 必须直接失败，不得静默降级。
 11. 如果模板底稿缺少第 `4` 部分的第二张概览图位，或维度配置数量与实际 `4.x` 章节不一致，pipeline 必须直接失败。
 
+## Preflight Check（草稿预检查）
+- `run_report_pipeline.py` 在 `build_payload` 之前执行 `preflight_report_content()`，验证草稿完整性。
+- 检查项：survey_period 存在性、key_issue_question_refs 格式与数量、theme 维度表命中、前言/项目背景/4.x 分析正文/5.1/5.2/5.3 章节存在性。
+- Preflight 失败时：输出 `PREFLIGHT_FAILED` 及具体错误列表，保存 `preflight.json`，退出码非零，不进入 Word 渲染。
+- AI 可以基于 preflight 错误修改草稿后重新运行，无需重写整份报告。
+
+## No-Fallback Policy（禁止程序兜底）
+- `4.x` 每道题分析正文：AI 缺失/不合格时直接 `raise ValueError`，不使用 `default_subtopic_paragraph()` 兜底。错误信息格式：`4.2 / q07 / 包装设计满意度分析 缺少 AI 分析正文`。
+- `5.1 问卷重点问题分析`：AI 缺失或不合格时 pipeline 直接失败。
+- `5.2 调研结果总结`：AI 缺失或不合格时 pipeline 直接失败。
+- `5.3 建议`：AI 缺失或不合格时 pipeline 直接失败。
+- 唯一允许程序生成的章节：`项目开展情况`、`问卷说明`、结算表、附件。
+
+## Two-Stage Mode（两阶段模式）
+- **一键模式**（现有命令继续可用）：
+  ```bash
+  python3 scripts/run_report_pipeline.py questionnaire.xlsx report_content.md --output-docx report.docx
+  ```
+- **两阶段模式**（长问卷或超时场景 fallback）：
+  1. 第一阶段：AI 生成 `report_content.md` 并保存到文件。运行 preflight 验证草稿。
+  2. 第二阶段：运行 pipeline 渲染 Word：
+     ```bash
+     python3 scripts/run_report_pipeline.py questionnaire.xlsx report_content.md --output-docx report.docx
+     ```
+  - 中断后不依赖聊天记忆恢复，只依赖落盘的 `report_content.md` 文件。
+  - 每次运行都保留 run directory（含 `questionnaire.json`、`report_payload.json`、`preflight.json`、`run_manifest.json`），供诊断使用。
+
 ## Supported Templates
 - `用药体验与疗效反馈`（内置硬编码回退）
 - `依从性与用药习惯`（内置硬编码回退）

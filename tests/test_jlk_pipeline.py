@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.build_payload import (
+    PreflightError,
     build_payload,
     build_programmatic_overall_analysis,
     build_programmatic_recommendations,
@@ -32,6 +33,7 @@ from scripts.build_payload import (
     load_dimension_library,
     normalize_survey_period,
     parse_markdown_content,
+    preflight_report_content,
     resolve_theme,
     validate_payload,
 )
@@ -182,6 +184,38 @@ def adherence_questionnaire() -> dict:
     return {"question_count": len(data), "questions": data}
 
 
+def result_analysis_markdown(questionnaire: dict, ai_dimensions: dict | None = None) -> str:
+    grouped = cluster_dimensions(questionnaire, ai_dimensions=ai_dimensions)
+    qmap = {
+        f"q{int(question['number']):02d}": question
+        for question in questionnaire["questions"]
+    }
+    lines = [
+        "## 问卷结果分析",
+        "",
+        f"本次问卷从{grouped['dimension_count']}个维度展开统计分析。",
+    ]
+    style_index = 0
+    for section in grouped["sections"]:
+        lines.extend([
+            "",
+            f"### {section['section_number']}{section['section_title']}",
+            "",
+            section.get("section_intro", ""),
+        ])
+        for subtopic in section["subtopics"]:
+            question_ref = subtopic["question_refs"][0]
+            question = qmap[question_ref]
+            lines.extend([
+                "",
+                f"#### {subtopic['subtitle']}",
+                "",
+                build_analysis_paragraph(question["question"], question["options"], style_index=style_index),
+            ])
+            style_index += 1
+    return "\n".join(lines)
+
+
 def sample_markdown() -> str:
     return f"""---
 product: 厄贝沙坦氢氯噻嗪片
@@ -214,89 +248,7 @@ key_issue_question_refs: '["q01", "q02"]'
 
 本次分析采用结构化处理方式。
 
-## 问卷结果分析
-
-本次问卷从7个维度展开统计分析。
-
-### 4.1药品疗效
-
-本维度用于观察患者对控压效果的主观感知。
-
-#### 血压控制效果分析
-
-多数患者在该题中的反馈集中在正向选项，说明控压结果的主流感知较为稳定。
-
-### 4.2药品安全性
-
-本维度用于观察患者对常见不适反应的主观感知。
-
-#### 头晕头痛不良反应分析
-
-多数患者并未将该症状视为主要负担。
-
-#### 口渴多尿不良反应分析
-
-患者对该类不适的整体反馈同样偏轻。
-
-### 4.3用药行为与习惯
-
-本维度用于观察患者的长期行为执行情况。
-
-#### 购药渠道分析
-
-渠道选择主要集中于正规渠道。
-
-#### 剂量遵循情况分析
-
-多数患者能够保持较稳定的剂量执行。
-
-#### 联合用药情况分析
-
-部分患者存在联合用药需求。
-
-#### 血压监测频率分析
-
-规律监测行为仍有继续提升空间。
-
-### 4.4用药便利性
-
-本维度用于观察频率与包装体验。
-
-#### 服药频率满意度分析
-
-大多数患者认为服药频率可以接受。
-
-#### 药品包装便利性分析
-
-包装便利性整体较好。
-
-### 4.5药品经济性
-
-本维度用于观察价格感知。
-
-#### 价格负担影响分析
-
-多数患者并未将价格视为主要障碍。
-
-### 4.6药品可及性
-
-本维度用于观察供应稳定性。
-
-#### 药品供应稳定性分析
-
-大多数患者认为购药较为顺畅。
-
-### 4.7用药指导信息评价
-
-本维度用于观察说明信息和指导支持。
-
-#### 说明书信息清晰度分析
-
-大多数患者能够理解说明书中的核心信息。
-
-#### 用药指导详细准确性分析
-
-现有指导信息总体能够满足基础使用需求。
+{result_analysis_markdown(efficacy_questionnaire())}
 
 ## 调研结果
 
@@ -348,6 +300,7 @@ valid_count: 1000
 disclaimer_unit: 北京玖麟空科技有限公司
 key_issue_question_refs: '["q03", "q08"]'
 ---
+{result_analysis_markdown(adherence_questionnaire())}
 {key_issue}
 
 ### 5.2调研结果总结
@@ -415,6 +368,13 @@ def dynamic_ai_dimensions() -> dict:
             },
         ]
     }
+
+
+def dynamic_markdown() -> str:
+    return minimal_markdown().replace(
+        result_analysis_markdown(adherence_questionnaire()),
+        result_analysis_markdown(adherence_questionnaire(), dynamic_ai_dimensions()),
+    )
 
 
 def copy_docx_with_document_xml_replace(source: Path, target: Path, old: str, new: str, count: int = 1) -> None:
@@ -662,6 +622,59 @@ class PipelineTest(unittest.TestCase):
         self.assertGreaterEqual(len(OPENING_STYLE_LIBRARY), 15)
         self.assertFalse(all(paragraph.startswith("从当前题目反馈分布看") for paragraph in analysis_paragraphs))
         self.assertGreaterEqual(len(set(openings)), int(len(openings) * 0.7))
+
+    def test_preflight_returns_structured_result_and_rejects_bad_4x_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+
+        result = preflight_report_content(
+            meta,
+            content,
+            library=load_dimension_library(),
+            questionnaire=efficacy_questionnaire(),
+        )
+        self.assertEqual(result["status"], "passed")
+        self.assertIn("checks", result)
+        self.assertEqual(result["errors"], [])
+
+        bad_content = copy.deepcopy(content)
+        bad_content["result_analysis"][0]["subtopics"][0]["paragraphs"] = ["过短的分析正文。"]
+        with self.assertRaises(PreflightError) as ctx:
+            preflight_report_content(
+                meta,
+                bad_content,
+                library=load_dimension_library(),
+                questionnaire=efficacy_questionnaire(),
+            )
+        self.assertEqual(ctx.exception.result["status"], "failed")
+        self.assertTrue(any("4.1 / q01" in error for error in ctx.exception.errors))
+        self.assertLessEqual(len(ctx.exception.result["checks"]), 40)
+
+    def test_preflight_theme_miss_suggests_limited_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+        meta = {**meta, "theme": "洛索洛芬价格调研"}
+
+        with self.assertRaises(PreflightError) as ctx:
+            preflight_report_content(
+                meta,
+                content,
+                library=load_dimension_library(),
+                questionnaire=efficacy_questionnaire(),
+            )
+        theme_errors = [error for error in ctx.exception.errors if "未命中固定维度表" in error]
+        self.assertEqual(len(theme_errors), 1)
+        self.assertIn("最接近的候选", theme_errors[0])
+        self.assertLessEqual(theme_errors[0].count("洛索洛芬钠凝胶贴膏"), 5)
+
+    def test_openai_agent_prompt_uses_current_5_2_heading(self) -> None:
+        prompt = (ROOT / "agents" / "openai.yaml").read_text(encoding="utf-8")
+        self.assertIn("5.2 调研结果总结", prompt)
+        self.assertNotIn("5.2 调研结果分析", prompt)
 
     def test_attachment_name_defaults_to_theme_without_changing_report_title(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1483,7 +1496,7 @@ class PipelineTest(unittest.TestCase):
         ai_dimensions = dynamic_ai_dimensions()
         with tempfile.TemporaryDirectory() as temp_dir:
             report_content = Path(temp_dir) / "content.md"
-            report_content.write_text(minimal_markdown(), encoding="utf-8")
+            report_content.write_text(dynamic_markdown(), encoding="utf-8")
             meta, content = parse_markdown_content(report_content)
             from scripts.build_payload import parse_dimensions_from_meta
             parsed_dims = parse_dimensions_from_meta({"dimensions_json": json.dumps(ai_dimensions)})
