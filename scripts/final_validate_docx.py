@@ -518,23 +518,32 @@ def _validate_51_text_chart_order(docx_path: Path, payload: dict) -> None:
     if start_idx is None or end_idx is None:
         return
 
-    chart_count = 0
-    text_count = 0
+    sequence: list[str] = []
     for i in range(start_idx + 1, end_idx):
         p = paragraphs[i]
         if p.findall(".//c:chart", {"c": "http://schemas.openxmlformats.org/drawingml/2006/chart"}):
-            chart_count += 1
+            sequence.append("chart")
         elif p.findall(".//w:drawing", ns):
             continue
         else:
             text_in_p = _paragraph_text(p, ns)
             if text_in_p.strip():
-                text_count += 1
+                sequence.append("text")
+
+    chart_count = sequence.count("chart")
+    text_count = sequence.count("text")
 
     if chart_count != 2:
         raise FinalValidationError(f"5.1 section should contain exactly 2 native charts, found {chart_count}.")
     if text_count < 2:
         raise FinalValidationError(f"5.1 section should contain at least 2 text paragraphs, found {text_count}.")
+
+    expected = ["text", "chart", "text", "chart"]
+    actual = [s for s in sequence if s in ("text", "chart")]
+    if actual != expected:
+        raise FinalValidationError(
+            f"5.1 section text/chart order must be text\u2192chart\u2192text\u2192chart, got: {'\u2192'.join(actual)}"
+        )
 
 
 def _validate_subtitle_formality(payload: dict) -> None:

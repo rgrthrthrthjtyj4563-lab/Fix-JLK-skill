@@ -829,9 +829,8 @@ class TemplateRenderer:
             self._replace_all_text("1642份", f"{sample_size}份")
             self._replace_all_text("1642名", f"{sample_size}名")
 
-        # Replace "项目名称" with service provider (服务商)
-        if service_unit:
-            self._replace_all_text("项目名称", service_unit)
+        # Replace "项目名称" with label 服务商
+        self._replace_all_text("项目名称", "服务商")
 
         # Replace survey period
         if survey_period_display:
@@ -1912,8 +1911,7 @@ class TemplateRenderer:
             replacements["1642份"] = f"{sample_size}份"
             replacements["1642名"] = f"{sample_size}名"
             replacements["1642"] = sample_size  # standalone number
-        if service_unit:
-            replacements["项目名称"] = service_unit
+        replacements["项目名称"] = "服务商"
         
         if not replacements:
             return

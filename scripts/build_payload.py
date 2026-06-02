@@ -545,7 +545,7 @@ def format_today() -> str:
 
 
 def format_survey_period_display(survey_period: str) -> str:
-    """Return compact display format: omit repeated year when possible."""
+    """Return compact display format: always show month in end portion."""
     parts = survey_period.split("——")
     if len(parts) != 2:
         return survey_period.replace("——", "-")
@@ -557,12 +557,9 @@ def format_survey_period_display(survey_period: str) -> str:
         sy, sm, sd = start_match.groups()
         ey, em, ed = end_match.groups()
         if sy == ey:
-            if sm == em:
-                return f"{sy}年{sm}月{sd}日-{ed}日"
             return f"{sy}年{sm}月{sd}日-{em}月{ed}日"
         return f"{sy}年{sm}月{sd}日-{ey}年{em}月{ed}日"
     return survey_period.replace("——", "-")
-
 
 def normalize_survey_period(text: str) -> str:
     cleaned = normalize_space(text).replace("—", "-").replace("–", "-").replace("至", "-").replace("~", "-")

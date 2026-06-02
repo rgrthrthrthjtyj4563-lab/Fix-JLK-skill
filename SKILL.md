@@ -137,10 +137,10 @@ description: "Use when generating patient questionnaire analysis reports for pha
 
 ## Customer Feedback Validation Rules
 - **日期格式**：`调研时间`、`样本采集时间` 等显示字段使用紧凑格式（如 `2025年10月01日-10月31日`），不使用原始 `——` 格式。`_global_replace_in_xml` 必须对两个字段同时替换。
-- **服务商**：模板占位符 `项目名称` 必须替换为 `service.unit`（服务商名），最终文档不得残留 `项目名称` 占位符。
+- **服务商**：模板占位符 `项目名称` 必须替换为标签 `服务商`，最终文档不得残留 `项目名称` 占位符。
 - **服务商一致性**：`service.unit` 和 `disclaimer.unit` 必须完全一致，否则 pipeline 失败。
 - **柱形图无图例**：横向柱形图（`chart_4_overview_bar`）不添加 `label` 参数和 `ax.legend()`，仅显示数值标注。
-- **5.1 文图交错**：`5.1 问卷重点问题分析` 章节的 2 张原生图表必须分别插入在第 1 段和第 2 段正文之后，不得批量插入在首段之前。最终验证需确认 5.1 包含恰好 2 张原生图表和至少 2 段正文。
+- **5.1 文图交错**：`5.1 问卷重点问题分析` 章节的 2 张原生图表必须分别插入在第 1 段和第 2 段正文之后，不得批量插入在首段之前。最终验证需确认 5.1 的正文与图表顺序严格为 `文1 → chart → 文2 → chart`，顺序不匹配则 pipeline 失败。
 - **None/nan/null 兜底阻断**：最终文档不得出现 `None`、`nan`、`null`、`NaN`、`NULL`、`N/A`、`undefined` 等程序占位值，出现则 pipeline 失败。
 - **survey_period_display 传递**：`build_payload` 生成 `survey_period_display` 字段并存入 payload meta，渲染器使用该字段替代原始 `survey_period` 用于显示。
 
