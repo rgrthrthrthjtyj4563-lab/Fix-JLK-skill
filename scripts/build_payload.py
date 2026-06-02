@@ -544,6 +544,26 @@ def format_today() -> str:
     return f"{today.year}年{today.month:02d}月{today.day:02d}日"
 
 
+def format_survey_period_display(survey_period: str) -> str:
+    """Return compact display format: omit repeated year when possible."""
+    parts = survey_period.split("——")
+    if len(parts) != 2:
+        return survey_period.replace("——", "-")
+    start = parts[0]
+    end = parts[1]
+    start_match = re.match(r"(\d{4})年(\d{2})月(\d{2})日", start)
+    end_match = re.match(r"(\d{4})年(\d{2})月(\d{2})日", end)
+    if start_match and end_match:
+        sy, sm, sd = start_match.groups()
+        ey, em, ed = end_match.groups()
+        if sy == ey:
+            if sm == em:
+                return f"{sy}年{sm}月{sd}日-{ed}日"
+            return f"{sy}年{sm}月{sd}日-{em}月{ed}日"
+        return f"{sy}年{sm}月{sd}日-{ey}年{em}月{ed}日"
+    return survey_period.replace("——", "-")
+
+
 def normalize_survey_period(text: str) -> str:
     cleaned = normalize_space(text).replace("—", "-").replace("–", "-").replace("至", "-").replace("~", "-")
     parts = [part.strip() for part in re.split(r"\s*-\s*", cleaned, maxsplit=1) if part.strip()]
@@ -1496,6 +1516,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
     if not survey_period_raw:
         raise ValueError("survey_period is required.")
     survey_period = normalize_survey_period(survey_period_raw)
+    survey_period_display = format_survey_period_display(survey_period)
     product = cli_args.product or meta.get("product") or meta.get("品种")
     region = cli_args.region or meta.get("region") or meta.get("地区")
     question_count = questionnaire.get("question_count", len(questionnaire.get("questions", [])))
@@ -1653,6 +1674,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "region": region,
             "time": cli_args.time or meta.get("time") or meta.get("时间"),
             "survey_period": survey_period,
+            "survey_period_display": survey_period_display,
             "valid_count": _valid_sample_value(cli_args.valid_count) or _valid_sample_value(meta.get("valid_count")) or sample_size,
             "sample_size": sample_size,
             "template_type": grouped["template_type"],
@@ -1663,7 +1685,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "drug_name": product,
             "region": region,
             "sample_size": str(sample_size) if sample_size else "",
-            "survey_period": survey_period or "",
+            "survey_period": survey_period_display or "",
             "report_date": format_today(),
         },
         "header_text": report_title,
@@ -1678,7 +1700,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
         "project_execution": build_project_execution(
             region,
             sample_size,
-            survey_period,
+            survey_period_display,
             question_count,
             dimension_names,
         ),
@@ -1780,6 +1802,10 @@ def validate_payload(payload: dict) -> None:
             raise ValueError("Settlement report amount is incorrect.")
         if int(settlement.get("total_amount", -1)) != expected_sample_amount + expected_report_amount:
             raise ValueError("Settlement total amount is incorrect.")
+    service_unit = payload.get("service", {}).get("unit", "")
+    disclaimer_unit = payload.get("disclaimer", {}).get("unit", "")
+    if service_unit and disclaimer_unit and service_unit != disclaimer_unit:
+        raise ValueError("Service unit and disclaimer unit must be identical.")
 
 
 def main() -> None:

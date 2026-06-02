@@ -30,6 +30,7 @@ from scripts.build_payload import (
     derive_preface,
     derive_project_background,
     fixed_dimensions_to_ai,
+    format_survey_period_display,
     load_dimension_library,
     normalize_survey_period,
     parse_markdown_content,
@@ -531,7 +532,7 @@ class PipelineTest(unittest.TestCase):
                 "项目工具：调查问卷，14道选择题。其内容涵盖药品疗效、药品安全性、用药行为与习惯、用药便利性、药品经济性、药品可及性、用药指导信息评价7大维度，全面覆盖患者用药全流程关键节点。",
                 "样本采集范围：北京市",
                 "样本采集数量：本次共收集筛选到有效问卷1789份。",
-                "样本采集时间：2025年10月01日——2025年10月31日",
+                "样本采集时间：2025年10月01日-31日",
             ],
         )
         self.assertEqual(payload["questionnaire_note"]["intro"], "为提升数据可比性与分析结果的科学性，本研究采用以下标准化统计处理方法对原始问卷数据进行系统规整：")
@@ -1008,7 +1009,7 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(payload["report_title"], "患者用药疗效问卷调研分析报告")
             self.assertEqual(payload["header_text"], "患者用药疗效问卷调研分析报告")
             self.assertIn("项目工具：调查问卷，14道选择题。其内容涵盖药品疗效、药品安全性、用药行为与习惯、用药便利性、药品经济性、药品可及性、用药指导信息评价7大维度，全面覆盖患者用药全流程关键节点。", texts)
-            self.assertIn("样本采集时间：2025年10月01日——2025年10月31日", texts)
+            self.assertIn("样本采集时间：2025年10月01日-31日", texts)
             self.assertIn(f"服务单位：{payload['service']['unit']}", texts)
             self.assertIn(f"日期：{payload['service']['date']}", texts)
             self.assertLess(texts.index(f"服务单位：{payload['service']['unit']}"), texts.index(f"日期：{payload['service']['date']}"))
@@ -1097,7 +1098,7 @@ class PipelineTest(unittest.TestCase):
             self.assertNotIn("w:sdt", xml)
             self.assertIn("updateFields", settings_xml)
             self.assertIn('w:val="true"', settings_xml)
-            self.assertIn("调研时间：2025年10月01日——2025年10月31日", xml)
+            self.assertIn("调研时间：2025年10月01日-31日", xml)
             self.assertNotIn("2025年11月1日-11月30日", xml)
             self.assertIn("宋体", xml)
             self.assertIn("宋体", styles_xml)
@@ -1623,6 +1624,105 @@ class PipelineTest(unittest.TestCase):
         payload["result_analysis"]["overview_charts"][1]["values"] = [1.5, 2, 3]
         with self.assertRaisesRegex(ValueError, "integer question counts"):
             validate_payload(payload)
+
+    def test_format_survey_period_display(self) -> None:
+        self.assertEqual(
+            format_survey_period_display("2025年10月01日——2025年10月31日"),
+            "2025年10月01日-31日",
+        )
+        self.assertEqual(
+            format_survey_period_display("2025年10月01日——2025年11月30日"),
+            "2025年10月01日-11月30日",
+        )
+        self.assertEqual(
+            format_survey_period_display("2024年12月01日——2025年01月15日"),
+            "2024年12月01日-2025年01月15日",
+        )
+        self.assertEqual(
+            format_survey_period_display("2025年10月01日——2025年10月15日"),
+            "2025年10月01日-15日",
+        )
+
+    def test_validate_payload_rejects_service_unit_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+        payload["service"]["unit"] = "甲方A"
+        payload["disclaimer"]["unit"] = "乙方B"
+        with self.assertRaisesRegex(ValueError, "Service unit and disclaimer unit must be identical"):
+            validate_payload(payload)
+
+    def test_validate_payload_accepts_matching_service_unit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+        payload["service"]["unit"] = "北京玖麟空科技有限公司"
+        payload["disclaimer"]["unit"] = "北京玖麟空科技有限公司"
+        validate_payload(payload)
+
+    def test_final_validator_rejects_leaked_none_values(self) -> None:
+        from scripts.final_validate_docx import _validate_no_leaked_none_values
+        with self.assertRaises(FinalValidationError):
+            _validate_no_leaked_none_values(["样本数量：None份"])
+        with self.assertRaises(FinalValidationError):
+            _validate_no_leaked_none_values(["发现nan个问题"])
+        with self.assertRaises(FinalValidationError):
+            _validate_no_leaked_none_values(["测试null值"])
+        _validate_no_leaked_none_values(["正常文本"])
+
+    def test_final_validator_rejects_survey_period_raw_format(self) -> None:
+        from scripts.final_validate_docx import _validate_survey_period_display_format
+        payload = {"meta": {"survey_period_display": "2025年10月01日-31日"}}
+        _validate_survey_period_display_format(
+            ["调研时间：2025年10月01日-31日"], payload
+        )
+        with self.assertRaises(FinalValidationError):
+            _validate_survey_period_display_format(
+                ["调研时间：2025年10月01日——2025年10月31日"], payload
+            )
+
+    def test_final_validator_rejects_unreplaced_project_name(self) -> None:
+        from scripts.final_validate_docx import _validate_service_provider_consistency
+        payload = {"service": {"unit": "某公司"}, "disclaimer": {"unit": "某公司"}}
+        with self.assertRaises(FinalValidationError):
+            _validate_service_provider_consistency(
+                ["服务商：项目名称"], payload
+            )
+        _validate_service_provider_consistency(
+            ["服务商：某公司"], payload
+        )
 
 
 if __name__ == "__main__":
