@@ -356,7 +356,7 @@ def _set_paragraph_style_props(
 
 # ─── Chart XML manipulation ──────────────────────────────────────────────────
 
-def _update_chart_data(chart_xml_path: Path, categories: list[str], values: list[float], title: str = None) -> None:
+def _update_chart_data(chart_xml_path: Path, categories: list[str], values: list[float], title: str = None, format_code: str = None) -> None:
     """Update the data in an Office-native chart XML file.
 
     Replaces <c:cat> category labels and <c:numCache> values,
@@ -440,7 +440,11 @@ def _update_chart_data(chart_xml_path: Path, categories: list[str], values: list
                 formula.text = f"Sheet1!$B$2:$B${len(values) + 1}"
             num_cache = num_ref.find(f"{{{c_ns}}}numCache")
             if num_cache is not None:
-                format_code = num_cache.find(f"{{{c_ns}}}formatCode")
+                fc = num_cache.find(f"{{{c_ns}}}formatCode")
+                if format_code is not None:
+                    if fc is None:
+                        fc = ET.SubElement(num_cache, f"{{{c_ns}}}formatCode")
+                    fc.text = format_code
                 for pt in list(num_cache.findall(f"{{{c_ns}}}pt")):
                     num_cache.remove(pt)
                 pt_count = num_cache.find(f"{{{c_ns}}}ptCount")
@@ -484,6 +488,11 @@ def _update_chart_data(chart_xml_path: Path, categories: list[str], values: list
                     formula.text = f"Sheet1!$B$2:$B${len(values) + 1}"
                 num_cache = num_ref.find(f"{{{c_ns}}}numCache")
                 if num_cache is not None:
+                    fc = num_cache.find(f"{{{c_ns}}}formatCode")
+                    if format_code is not None:
+                        if fc is None:
+                            fc = ET.SubElement(num_cache, f"{{{c_ns}}}formatCode")
+                        fc.text = format_code
                     for pt in list(num_cache.findall(f"{{{c_ns}}}pt")):
                         num_cache.remove(pt)
                     pt_count = num_cache.find(f"{{{c_ns}}}ptCount")
@@ -838,7 +847,9 @@ class TemplateRenderer:
         region = self.meta.get("region", "")
         sample_size = self.meta.get("sample_size") or self.meta.get("valid_count") or ""
         survey_period = self.meta.get("survey_period", "")
+        survey_period_display = self.meta.get("survey_period_display", survey_period)
         service_date = self.payload.get("service", {}).get("date", "")
+        service_unit = self.payload.get("service", {}).get("unit", "")
 
         # Replace "厄贝沙坦氢氯噻嗪片" with product name
         if product and product != "厄贝沙坦氢氯噻嗪片":
@@ -847,6 +858,9 @@ class TemplateRenderer:
         # Replace "广东省" with region
         if region and region != "广东省":
             self._replace_all_text("广东省", region)
+
+        # Replace "项目名称" with "服务商" on cover page
+        self._replace_all_text("项目名称", "服务商")
 
         # Replace sample count
         if sample_size:
@@ -858,16 +872,16 @@ class TemplateRenderer:
             self._replace_all_text("1642份", f"{sample_size}份")
             self._replace_all_text("1642名", f"{sample_size}名")
 
-        # Replace survey period
-        if survey_period:
+        # Replace survey period with display format
+        if survey_period_display:
             for i, info in self.anchors.items():
                 if info["type"] == "p" and "调研时间" in info["text"]:
                     p = self._get_paragraph_at(i)
-                    _overwrite_paragraph_text_preserve_run_style(p, f"调研时间：{survey_period}")
+                    _overwrite_paragraph_text_preserve_run_style(p, f"调研时间：{survey_period_display}")
                     continue
                 if info["type"] == "p" and "样本采集时间" in info["text"]:
                     p = self._get_paragraph_at(i)
-                    _overwrite_paragraph_text_preserve_run_style(p, f"样本采集时间：{survey_period}")
+                    _overwrite_paragraph_text_preserve_run_style(p, f"样本采集时间：{survey_period_display}")
 
         if service_date:
             self._replace_all_text("2025年12月11日", service_date)
@@ -1521,7 +1535,7 @@ class TemplateRenderer:
             fig_height = max(4.05, 0.48 * len(categories) + 0.95)
             fig, ax = plt.subplots(figsize=(6.93, fig_height), dpi=160)
             y_pos = list(range(len(categories)))
-            ax.barh(y_pos, values, color=blue, edgecolor=blue, height=0.56, label="值")
+            ax.barh(y_pos, values, color=blue, edgecolor=blue, height=0.56)
             ax.set_yticks(y_pos)
             ax.set_yticklabels(categories, fontsize=11, color="#666666")
             ax.invert_yaxis()
@@ -1537,7 +1551,6 @@ class TemplateRenderer:
             ax.set_xlim(0, max_value * 1.08 if max_value else 1)
             for y, value in enumerate(values):
                 ax.text(float(value) + (max_value * 0.012 if max_value else 0.02), y, f"{value:g}", va="center", fontsize=11, color="#666666")
-            ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.22), frameon=False, fontsize=10, handlelength=0.8)
             if title and role != "overview":
                 ax.set_title(title, fontsize=12, pad=10)
             fig.subplots_adjust(left=0.28, right=0.96, top=0.96, bottom=0.20)
@@ -1611,13 +1624,27 @@ class TemplateRenderer:
             self._rebuild_anchors()
             return
 
+        # Find text paragraphs in 5.1 section (excluding charts)
+        key_issue_text_paras = []
+        for i in range(start_idx + 1, end_idx):
+            info = self.anchors.get(i)
+            if not info or info["type"] != "p":
+                continue
+            paragraph = info["elem"]
+            if _paragraph_has_chart(paragraph):
+                continue
+            text = _get_paragraph_text(paragraph).strip()
+            if text:
+                key_issue_text_paras.append(paragraph)
+
         if native_pie_template is not None:
-            insert_before = self._get_paragraph_at(start_idx + 1) if start_idx + 1 < end_idx else self._get_paragraph_at(end_idx)
+            # Interleave: paragraph1 → chart1 → paragraph2 → chart2
             for idx in range(min(2, len(key_issue_items))):
                 chart_paragraph = copy.deepcopy(native_pie_template)
                 for chart in chart_paragraph.findall(".//c:chart", NS):
                     chart.set(qn("r:id"), f"rIdJlkKeyIssueChart{idx + 1}")
-                insert_before.addprevious(chart_paragraph)
+                if idx < len(key_issue_text_paras):
+                    key_issue_text_paras[idx].addnext(chart_paragraph)
 
         self._rebuild_anchors()
 
@@ -1957,6 +1984,7 @@ class TemplateRenderer:
         product = rf.get("drug_name", "")
         region = rf.get("region", "")
         sample_size = rf.get("sample_size", "")
+        service_unit = self.payload.get("service", {}).get("unit", "")
         
         if product:
             replacements["厄贝沙坦氢氯噻嗪片"] = product
@@ -1966,6 +1994,8 @@ class TemplateRenderer:
             replacements["1642份"] = f"{sample_size}份"
             replacements["1642名"] = f"{sample_size}名"
             replacements["1642"] = sample_size  # standalone number
+        if service_unit:
+            replacements["项目名称"] = "服务商"
         
         if not replacements:
             return
@@ -2103,7 +2133,7 @@ class TemplateRenderer:
             tf.write(source_xml)
             temp_path = Path(tf.name)
         try:
-            _update_chart_data(temp_path, categories, values, title)
+            _update_chart_data(temp_path, categories, values, title, format_code="0.00%")
             return temp_path.read_bytes()
         finally:
             temp_path.unlink(missing_ok=True)
@@ -2340,7 +2370,9 @@ class TemplateRenderer:
         region = self.meta.get("region", "")
         product = self.meta.get("product", "")
         survey_period = self.meta.get("survey_period", "")
-        if not region and not product and not survey_period:
+        survey_period_display = self.meta.get("survey_period_display", survey_period)
+        service_unit = self.payload.get("service", {}).get("unit", "")
+        if not region and not product and not survey_period_display:
             return
         
         # Map old → new from the template's original data
@@ -2362,8 +2394,12 @@ class TemplateRenderer:
                         text = data.decode("utf-8", errors="replace")
                         for old, new in replacements.items():
                             text = text.replace(old, new)
-                        if survey_period and item.filename == "word/document.xml":
-                            text = re.sub(r"调研时间：[^<]+", f"调研时间：{survey_period}", text)
+                        if survey_period_display and item.filename == "word/document.xml":
+                            text = re.sub(r"调研时间：[^<]+", f"调研时间：{survey_period_display}", text)
+                            text = re.sub(r"样本采集时间：[^<]+", f"样本采集时间：{survey_period_display}", text)
+                            text = text.replace("——", "-")
+                        if service_unit:
+                            text = text.replace("项目名称", "服务商")
                         data = text.encode("utf-8")
                     zout.writestr(item, data)
         

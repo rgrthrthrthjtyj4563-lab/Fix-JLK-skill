@@ -407,6 +407,22 @@ def format_today() -> str:
     return f"{today.year}年{today.month:02d}月{today.day:02d}日"
 
 
+def format_survey_period_display(normalized: str) -> str:
+    """Convert normalized survey period to compact display format.
+
+    Input:  2025年10月01日——2025年10月31日
+    Output: 2025年10月01日-10月31日 (same year, end omits year)
+    Output: 2025年12月01日-2026年01月31日 (different year, both full)
+    """
+    numbers = [int(x) for x in re.findall(r"\d+", normalized)]
+    if len(numbers) != 6:
+        return normalized.replace("——", "-")
+    start_year, start_month, start_day, end_year, end_month, end_day = numbers
+    if start_year == end_year:
+        return f"{start_year}年{start_month:02d}月{start_day:02d}日-{end_month:02d}月{end_day:02d}日"
+    return f"{start_year}年{start_month:02d}月{start_day:02d}日-{end_year}年{end_month:02d}月{end_day:02d}日"
+
+
 def normalize_survey_period(text: str) -> str:
     cleaned = normalize_space(text).replace("—", "-").replace("–", "-").replace("至", "-").replace("~", "-")
     parts = [part.strip() for part in re.split(r"\s*-\s*", cleaned, maxsplit=1) if part.strip()]
@@ -930,6 +946,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
     if not survey_period_raw:
         raise ValueError("survey_period is required.")
     survey_period = normalize_survey_period(survey_period_raw)
+    survey_period_display = format_survey_period_display(survey_period)
     product = cli_args.product or meta.get("product") or meta.get("品种")
     region = cli_args.region or meta.get("region") or meta.get("地区")
     question_count = questionnaire.get("question_count", len(questionnaire.get("questions", [])))
@@ -1074,6 +1091,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "region": region,
             "time": cli_args.time or meta.get("time") or meta.get("时间"),
             "survey_period": survey_period,
+            "survey_period_display": survey_period_display,
             "valid_count": _valid_sample_value(cli_args.valid_count) or _valid_sample_value(meta.get("valid_count")) or sample_size,
             "sample_size": sample_size,
             "template_type": grouped["template_type"],
@@ -1084,7 +1102,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "drug_name": product,
             "region": region,
             "sample_size": str(sample_size) if sample_size else "",
-            "survey_period": survey_period or "",
+            "survey_period": survey_period_display,
             "report_date": format_today(),
         },
         "header_text": report_title,
@@ -1099,7 +1117,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
         "project_execution": build_project_execution(
             region,
             sample_size,
-            survey_period,
+            survey_period_display,
             question_count,
             dimension_names,
         ),
@@ -1180,12 +1198,17 @@ def validate_payload(payload: dict) -> None:
     if settlement:
         expected_sample_amount = int(settlement.get("sample_count", 0)) * int(settlement.get("sample_unit_price", 0))
         expected_report_amount = int(settlement.get("report_count", 0)) * int(settlement.get("report_unit_price", 0))
+        expected_total = expected_sample_amount + expected_report_amount
         if int(settlement.get("sample_amount", -1)) != expected_sample_amount:
             raise ValueError("Settlement sample amount is incorrect.")
         if int(settlement.get("report_amount", -1)) != expected_report_amount:
             raise ValueError("Settlement report amount is incorrect.")
-        if int(settlement.get("total_amount", -1)) != expected_sample_amount + expected_report_amount:
+        if int(settlement.get("total_amount", -1)) != expected_total:
             raise ValueError("Settlement total amount is incorrect.")
+    service_unit = payload.get("service", {}).get("unit", "")
+    disclaimer_unit = payload.get("disclaimer", {}).get("unit", "")
+    if service_unit and disclaimer_unit and service_unit != disclaimer_unit:
+        raise ValueError("Service unit and disclaimer unit must be identical.")
 
 
 def main() -> None:

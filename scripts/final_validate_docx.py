@@ -522,11 +522,53 @@ def _validate_subtitle_formality(payload: dict) -> None:
                     )
 
 
+def _validate_no_leaked_none_values(texts: list[str]) -> None:
+    full_text = "\n".join(texts)
+    for bad in ["None", "none", "nan", "NaN", "null", "NULL"]:
+        if bad in full_text:
+            raise FinalValidationError(f"Rendered report contains leaked '{bad}' value.")
+
+
+def _validate_survey_period_display_format(texts: list[str], payload: dict) -> None:
+    survey_period_display = payload.get("meta", {}).get("survey_period_display", "")
+    if not survey_period_display:
+        return
+    for text in texts:
+        if "调研时间：" in text or "样本采集时间：" in text:
+            if survey_period_display not in text:
+                raise FinalValidationError(
+                    f"Survey period display format mismatch. Expected '{survey_period_display}' in text: {text[:60]}"
+                )
+            if "——" in text:
+                raise FinalValidationError("Survey period display uses old long-dash format instead of compact format.")
+    project_execution_lines = [t for t in texts if "样本采集时间：" in t]
+    if project_execution_lines:
+        line = project_execution_lines[0]
+        if survey_period_display not in line:
+            raise FinalValidationError(
+                f"Project execution survey period mismatch. Expected '{survey_period_display}' in: {line[:60]}"
+            )
+        if "——" in line:
+            raise FinalValidationError("Project execution survey period uses old long-dash format instead of compact format.")
+
+
+def _validate_service_provider_consistency(texts: list[str], payload: dict) -> None:
+    service_unit = payload.get("service", {}).get("unit", "")
+    disclaimer_unit = payload.get("disclaimer", {}).get("unit", "")
+    if service_unit and disclaimer_unit and service_unit != disclaimer_unit:
+        raise FinalValidationError(f"Service unit '{service_unit}' and disclaimer unit '{disclaimer_unit}' must be identical.")
+    if "项目名称" in "\n".join(texts):
+        raise FinalValidationError("Cover page still contains '项目名称' instead of '服务商'.")
+
+
 def validate_docx(docx_path: Path, payload: dict) -> None:
     doc = Document(str(docx_path))
     texts = _visible_paragraph_texts(doc)
+    _validate_no_leaked_none_values(texts)
     _validate_sample_size_text(texts, payload)
     _validate_settlement_table(doc, payload)
+    _validate_survey_period_display_format(texts, payload)
+    _validate_service_provider_consistency(texts, payload)
     _validate_result_sections(texts, payload)
     _validate_analysis_paragraphs(texts, payload)
     _validate_analysis_opening_diversity(payload)

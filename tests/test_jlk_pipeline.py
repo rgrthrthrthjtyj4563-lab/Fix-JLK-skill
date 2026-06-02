@@ -26,6 +26,7 @@ from scripts.build_payload import (
     choose_recommendations,
     derive_preface,
     derive_project_background,
+    format_survey_period_display,
     normalize_survey_period,
     parse_markdown_content,
     validate_payload,
@@ -498,7 +499,7 @@ class PipelineTest(unittest.TestCase):
                 "项目工具：调查问卷，14道选择题。其内容涵盖药品疗效、药品安全性、用药行为与习惯、用药便利性、药品经济性、药品可及性、用药指导信息评价7大维度，全面覆盖患者用药全流程关键节点。",
                 "样本采集范围：北京市",
                 "样本采集数量：本次共收集筛选到有效问卷1789份。",
-                "样本采集时间：2025年10月01日——2025年10月31日",
+                "样本采集时间：2025年10月01日-10月31日",
             ],
         )
         self.assertEqual(payload["questionnaire_note"]["intro"], "为提升数据可比性与分析结果的科学性，本研究采用以下标准化统计处理方法对原始问卷数据进行系统规整：")
@@ -535,6 +536,7 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(payload["report_title"], "问卷调研分析报告")
         self.assertEqual(payload["header_text"], "问卷调研分析报告")
         self.assertEqual(payload["meta"]["survey_period"], "2025年10月01日——2025年10月31日")
+        self.assertEqual(payload["meta"]["survey_period_display"], "2025年10月01日-10月31日")
         self.assertEqual(payload["service"]["unit"], "北京玖麟空科技有限公司")
         self.assertRegex(payload["service"]["date"], r"^2025年11月\d{2}日$")
         service_dt = datetime.strptime(payload["service"]["date"], "%Y年%m月%d日").date()
@@ -741,6 +743,45 @@ class PipelineTest(unittest.TestCase):
             "2025年09月01日——2025年10月02日",
         )
 
+    def test_format_survey_period_display_compact_format(self) -> None:
+        self.assertEqual(
+            format_survey_period_display("2025年10月01日——2025年10月31日"),
+            "2025年10月01日-10月31日",
+        )
+        self.assertEqual(
+            format_survey_period_display("2025年12月01日——2026年01月31日"),
+            "2025年12月01日-2026年01月31日",
+        )
+        self.assertEqual(
+            format_survey_period_display("2026年05月13日——2026年05月31日"),
+            "2026年05月13日-05月31日",
+        )
+
+    def test_validate_payload_rejects_mismatched_service_disclaimer_units(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+        payload["service"]["unit"] = "公司A"
+        payload["disclaimer"]["unit"] = "公司B"
+        with self.assertRaisesRegex(ValueError, "Service unit and disclaimer unit must be identical"):
+            validate_payload(payload)
+
     def test_render_from_template_preserves_template_pages_and_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             report_content = Path(temp_dir) / "content.md"
@@ -798,7 +839,7 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(payload["report_title"], "患者用药疗效问卷调研分析报告")
             self.assertEqual(payload["header_text"], "患者用药疗效问卷调研分析报告")
             self.assertIn("项目工具：调查问卷，14道选择题。其内容涵盖药品疗效、药品安全性、用药行为与习惯、用药便利性、药品经济性、药品可及性、用药指导信息评价7大维度，全面覆盖患者用药全流程关键节点。", texts)
-            self.assertIn("样本采集时间：2025年10月01日——2025年10月31日", texts)
+            self.assertIn("样本采集时间：2025年10月01日-10月31日", texts)
             self.assertIn(f"服务单位：{payload['service']['unit']}", texts)
             self.assertIn(f"日期：{payload['service']['date']}", texts)
             self.assertLess(texts.index(f"服务单位：{payload['service']['unit']}"), texts.index(f"日期：{payload['service']['date']}"))
@@ -877,8 +918,9 @@ class PipelineTest(unittest.TestCase):
             self.assertNotIn("w:sdt", xml)
             self.assertIn("updateFields", settings_xml)
             self.assertIn('w:val="true"', settings_xml)
-            self.assertIn("调研时间：2025年10月01日——2025年10月31日", xml)
+            self.assertIn("调研时间：2025年10月01日-10月31日", xml)
             self.assertNotIn("2025年11月1日-11月30日", xml)
+            self.assertNotIn("——", xml)
             self.assertIn("宋体", xml)
             self.assertIn("宋体", styles_xml)
             self.assertIn("宋体", theme_xml)
