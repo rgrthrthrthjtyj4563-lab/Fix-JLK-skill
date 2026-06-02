@@ -30,6 +30,7 @@ from scripts.build_payload import (
     derive_preface,
     derive_project_background,
     fixed_dimensions_to_ai,
+    format_survey_period_display,
     load_dimension_library,
     normalize_survey_period,
     parse_markdown_content,
@@ -531,7 +532,7 @@ class PipelineTest(unittest.TestCase):
                 "项目工具：调查问卷，14道选择题。其内容涵盖药品疗效、药品安全性、用药行为与习惯、用药便利性、药品经济性、药品可及性、用药指导信息评价7大维度，全面覆盖患者用药全流程关键节点。",
                 "样本采集范围：北京市",
                 "样本采集数量：本次共收集筛选到有效问卷1789份。",
-                "样本采集时间：2025年10月01日——2025年10月31日",
+                "样本采集时间：2025年10月01日-10月31日",
             ],
         )
         self.assertEqual(payload["questionnaire_note"]["intro"], "为提升数据可比性与分析结果的科学性，本研究采用以下标准化统计处理方法对原始问卷数据进行系统规整：")
@@ -1008,7 +1009,7 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(payload["report_title"], "患者用药疗效问卷调研分析报告")
             self.assertEqual(payload["header_text"], "患者用药疗效问卷调研分析报告")
             self.assertIn("项目工具：调查问卷，14道选择题。其内容涵盖药品疗效、药品安全性、用药行为与习惯、用药便利性、药品经济性、药品可及性、用药指导信息评价7大维度，全面覆盖患者用药全流程关键节点。", texts)
-            self.assertIn("样本采集时间：2025年10月01日——2025年10月31日", texts)
+            self.assertIn("样本采集时间：2025年10月01日-10月31日", texts)
             self.assertIn(f"服务单位：{payload['service']['unit']}", texts)
             self.assertIn(f"日期：{payload['service']['date']}", texts)
             self.assertLess(texts.index(f"服务单位：{payload['service']['unit']}"), texts.index(f"日期：{payload['service']['date']}"))
@@ -1097,7 +1098,7 @@ class PipelineTest(unittest.TestCase):
             self.assertNotIn("w:sdt", xml)
             self.assertIn("updateFields", settings_xml)
             self.assertIn('w:val="true"', settings_xml)
-            self.assertIn("调研时间：2025年10月01日——2025年10月31日", xml)
+            self.assertIn("调研时间：2025年10月01日-10月31日", xml)
             self.assertNotIn("2025年11月1日-11月30日", xml)
             self.assertIn("宋体", xml)
             self.assertIn("宋体", styles_xml)
@@ -1623,6 +1624,177 @@ class PipelineTest(unittest.TestCase):
         payload["result_analysis"]["overview_charts"][1]["values"] = [1.5, 2, 3]
         with self.assertRaisesRegex(ValueError, "integer question counts"):
             validate_payload(payload)
+
+    def test_format_survey_period_display(self) -> None:
+        self.assertEqual(
+            format_survey_period_display("2025年10月01日——2025年10月31日"),
+            "2025年10月01日-10月31日",
+        )
+        self.assertEqual(
+            format_survey_period_display("2025年10月01日——2025年11月30日"),
+            "2025年10月01日-11月30日",
+        )
+        self.assertEqual(
+            format_survey_period_display("2024年12月01日——2025年01月15日"),
+            "2024年12月01日-2025年01月15日",
+        )
+        self.assertEqual(
+            format_survey_period_display("2025年10月01日——2025年10月15日"),
+            "2025年10月01日-10月15日",
+        )
+
+    def test_validate_payload_rejects_service_unit_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+        payload["service"]["unit"] = "甲方A"
+        payload["disclaimer"]["unit"] = "乙方B"
+        with self.assertRaisesRegex(ValueError, "Service unit and disclaimer unit must be identical"):
+            validate_payload(payload)
+
+    def test_validate_payload_accepts_matching_service_unit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+        payload["service"]["unit"] = "北京玖麟空科技有限公司"
+        payload["disclaimer"]["unit"] = "北京玖麟空科技有限公司"
+        validate_payload(payload)
+
+    def test_final_validator_rejects_leaked_none_values(self) -> None:
+        from scripts.final_validate_docx import _validate_no_leaked_none_values
+        with self.assertRaises(FinalValidationError):
+            _validate_no_leaked_none_values(["样本数量：None份"])
+        with self.assertRaises(FinalValidationError):
+            _validate_no_leaked_none_values(["发现nan个问题"])
+        with self.assertRaises(FinalValidationError):
+            _validate_no_leaked_none_values(["测试null值"])
+        _validate_no_leaked_none_values(["正常文本"])
+
+    def test_final_validator_rejects_survey_period_raw_format(self) -> None:
+        from scripts.final_validate_docx import _validate_survey_period_display_format
+        payload = {"meta": {"survey_period_display": "2025年10月01日-10月31日"}}
+        _validate_survey_period_display_format(
+            ["调研时间：2025年10月01日-10月31日"], payload
+        )
+        with self.assertRaises(FinalValidationError):
+            _validate_survey_period_display_format(
+                ["调研时间：2025年10月01日——2025年10月31日"], payload
+            )
+
+    def test_final_validator_rejects_unreplaced_project_name(self) -> None:
+        from scripts.final_validate_docx import _validate_service_provider_consistency
+        payload = {"service": {"unit": "某公司"}, "disclaimer": {"unit": "某公司"}}
+        with self.assertRaises(FinalValidationError):
+            _validate_service_provider_consistency(
+                ["服务商：项目名称"], payload
+            )
+        _validate_service_provider_consistency(
+            ["服务商：某公司"], payload
+        )
+
+
+    def test_final_validator_rejects_wrong_51_text_chart_order(self) -> None:
+        from scripts.final_validate_docx import _validate_51_text_chart_order
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+            output_docx = Path(temp_dir) / "rendered.docx"
+            TemplateRenderer(Path(payload["meta"]["template_doc"]), payload).render(output_docx)
+
+            good_docx = output_docx
+            validate_docx(good_docx, payload)
+
+            wrong_order_docx = Path(temp_dir) / "wrong_order.docx"
+            with ZipFile(good_docx) as src_zip, ZipFile(wrong_order_docx, "w") as dst_zip:
+                for item in src_zip.infolist():
+                    data = src_zip.read(item.filename)
+                    if item.filename == "word/document.xml":
+                        root = ET.fromstring(data)
+                        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+                              "c": "http://schemas.openxmlformats.org/drawingml/2006/chart",
+                              "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"}
+                        paragraphs = root.findall(".//w:p", ns)
+                        texts = ["".join(node.text or "" for node in p.findall(".//w:t", ns)).strip() for p in paragraphs]
+                        start_idx = next((i for i, t in enumerate(texts) if t == "5.1问卷重点问题分析"), None)
+                        end_idx = next((i for i, t in enumerate(texts) if t == "5.2调研结果总结"), None)
+                        if start_idx is not None and end_idx is not None:
+                            chart_paragraphs = []
+                            text_paragraphs = []
+                            for i in range(start_idx + 1, end_idx):
+                                p = paragraphs[i]
+                                if p.findall(".//c:chart", {"c": "http://schemas.openxmlformats.org/drawingml/2006/chart"}):
+                                    chart_paragraphs.append((i, p))
+                                else:
+                                    text_in_p = "".join(node.text or "" for node in p.findall(".//w:t", ns)).strip()
+                                    if text_in_p and not p.findall(".//w:drawing", ns):
+                                        text_paragraphs.append((i, p))
+                            if len(chart_paragraphs) >= 2 and len(text_paragraphs) >= 2:
+                                chart1_idx = chart_paragraphs[0][0]
+                                chart2_idx = chart_paragraphs[1][0]
+                                text2_idx = text_paragraphs[1][0]
+                                body = root.find("w:body", ns)
+                                body_children = list(body)
+                                chart1_elem = chart_paragraphs[0][1]
+                                chart2_elem = chart_paragraphs[1][1]
+                                text2_elem = text_paragraphs[1][1]
+                                if text2_idx < chart2_idx:
+                                    text2_pos = list(body).index(text2_elem)
+                                    chart2_pos = list(body).index(chart2_elem)
+                                    body.remove(text2_elem)
+                                    body.insert(chart2_pos, text2_elem)
+                        data = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+                    dst_zip.writestr(item, data)
+
+            with self.assertRaisesRegex(FinalValidationError, "text/chart order"):
+                _validate_51_text_chart_order(wrong_order_docx, payload)
 
 
 if __name__ == "__main__":

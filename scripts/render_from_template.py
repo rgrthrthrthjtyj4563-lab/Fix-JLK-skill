@@ -332,7 +332,7 @@ def _set_paragraph_style_props(
 
 # ─── Chart XML manipulation ──────────────────────────────────────────────────
 
-def _update_chart_data(chart_xml_path: Path, categories: list[str], values: list[float], title: str = None) -> None:
+def _update_chart_data(chart_xml_path: Path, categories: list[str], values: list[float], title: str = None, format_code: str = None) -> None:
     """Update the data in an Office-native chart XML file.
 
     Replaces <c:cat> category labels and <c:numCache> values,
@@ -410,13 +410,17 @@ def _update_chart_data(chart_xml_path: Path, categories: list[str], values: list
         if num_ref is not None:
             num_cache = num_ref.find(f"{{{c_ns}}}numCache")
             if num_cache is not None:
-                format_code = num_cache.find(f"{{{c_ns}}}formatCode")
                 for pt in list(num_cache.findall(f"{{{c_ns}}}pt")):
                     num_cache.remove(pt)
                 pt_count = num_cache.find(f"{{{c_ns}}}ptCount")
                 if pt_count is None:
                     pt_count = ET.SubElement(num_cache, f"{{{c_ns}}}ptCount")
                 pt_count.set("val", str(len(values)))
+                if format_code is not None:
+                    fc_elem = num_cache.find(f"{{{c_ns}}}formatCode")
+                    if fc_elem is None:
+                        fc_elem = ET.SubElement(num_cache, f"{{{c_ns}}}formatCode")
+                    fc_elem.text = format_code
                 for idx, val in enumerate(values):
                     pt = ET.SubElement(num_cache, f"{{{c_ns}}}pt")
                     pt.set("idx", str(idx))
@@ -454,6 +458,11 @@ def _update_chart_data(chart_xml_path: Path, categories: list[str], values: list
                     if pt_count is None:
                         pt_count = ET.SubElement(num_cache, f"{{{c_ns}}}ptCount")
                     pt_count.set("val", str(len(values)))
+                    if format_code is not None:
+                        fc_elem = num_cache.find(f"{{{c_ns}}}formatCode")
+                        if fc_elem is None:
+                            fc_elem = ET.SubElement(num_cache, f"{{{c_ns}}}formatCode")
+                        fc_elem.text = format_code
                     for idx, val in enumerate(values):
                         pt = ET.SubElement(num_cache, f"{{{c_ns}}}pt")
                         pt.set("idx", str(idx))
@@ -798,7 +807,9 @@ class TemplateRenderer:
         region = self.meta.get("region", "")
         sample_size = self.meta.get("sample_size") or self.meta.get("valid_count") or ""
         survey_period = self.meta.get("survey_period", "")
+        survey_period_display = self.meta.get("survey_period_display", survey_period)
         service_date = self.payload.get("service", {}).get("date", "")
+        service_unit = self.payload.get("service", {}).get("unit", "")
 
         # Replace "厄贝沙坦氢氯噻嗪片" with product name
         if product and product != "厄贝沙坦氢氯噻嗪片":
@@ -818,16 +829,19 @@ class TemplateRenderer:
             self._replace_all_text("1642份", f"{sample_size}份")
             self._replace_all_text("1642名", f"{sample_size}名")
 
+        # Replace "项目名称" with label 服务商
+        self._replace_all_text("项目名称", "服务商")
+
         # Replace survey period
-        if survey_period:
+        if survey_period_display:
             for i, info in self.anchors.items():
                 if info["type"] == "p" and "调研时间" in info["text"]:
                     p = self._get_paragraph_at(i)
-                    _overwrite_paragraph_text_preserve_run_style(p, f"调研时间：{survey_period}")
+                    _overwrite_paragraph_text_preserve_run_style(p, f"调研时间：{survey_period_display}")
                     continue
                 if info["type"] == "p" and "样本采集时间" in info["text"]:
                     p = self._get_paragraph_at(i)
-                    _overwrite_paragraph_text_preserve_run_style(p, f"样本采集时间：{survey_period}")
+                    _overwrite_paragraph_text_preserve_run_style(p, f"样本采集时间：{survey_period_display}")
 
         if service_date:
             self._replace_all_text("2025年12月11日", service_date)
@@ -1470,7 +1484,7 @@ class TemplateRenderer:
             fig_height = max(4.05, 0.48 * len(categories) + 0.95)
             fig, ax = plt.subplots(figsize=(6.93, fig_height), dpi=160)
             y_pos = list(range(len(categories)))
-            ax.barh(y_pos, values, color=blue, edgecolor=blue, height=0.56, label="值")
+            ax.barh(y_pos, values, color=blue, edgecolor=blue, height=0.56)
             ax.set_yticks(y_pos)
             ax.set_yticklabels(categories, fontsize=11, color="#666666")
             ax.invert_yaxis()
@@ -1486,7 +1500,6 @@ class TemplateRenderer:
             ax.set_xlim(0, max_value * 1.08 if max_value else 1)
             for y, value in enumerate(values):
                 ax.text(float(value) + (max_value * 0.012 if max_value else 0.02), y, f"{value:g}", va="center", fontsize=11, color="#666666")
-            ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.22), frameon=False, fontsize=10, handlelength=0.8)
             if title and role != "overview":
                 ax.set_title(title, fontsize=12, pad=10)
             fig.subplots_adjust(left=0.28, right=0.96, top=0.96, bottom=0.20)
@@ -1889,6 +1902,7 @@ class TemplateRenderer:
         region = rf.get("region", "")
         sample_size = rf.get("sample_size", "")
         
+        service_unit = self.payload.get("service", {}).get("unit", "")
         if product:
             replacements["厄贝沙坦氢氯噻嗪片"] = product
         if region:
@@ -1897,6 +1911,7 @@ class TemplateRenderer:
             replacements["1642份"] = f"{sample_size}份"
             replacements["1642名"] = f"{sample_size}名"
             replacements["1642"] = sample_size  # standalone number
+        replacements["项目名称"] = "服务商"
         
         if not replacements:
             return
@@ -2157,12 +2172,24 @@ class TemplateRenderer:
                 rels_root.append(rel)
                 chart_relationships.append((chart_number, rid))
 
-            insert_at = list(body).index(children[start_idx]) + 1
-            for offset, (chart_number, rid) in enumerate(chart_relationships):
-                body.insert(
-                    insert_at + offset,
-                    self._chart_paragraph_xml(rid, 3000 + chart_number, f"重点问题图表 {chart_number - 2}"),
-                )
+            # Interleave charts after text paragraphs (not batch before first paragraph)
+            text_paras = []
+            for idx, child in enumerate(list(body)):
+                if start_idx < idx < end_idx:
+                    if child.tag == qn("w:p") and paragraph_text(child) and not child.findall(f".//{{{NS['c']}}}chart"):
+                        text_paras.append(child)
+
+            for i, (chart_number, rid) in enumerate(chart_relationships):
+                chart_elem = self._chart_paragraph_xml(rid, 3000 + chart_number, f"重点问题图表 {chart_number - 2}")
+                if i < len(text_paras):
+                    current_children = list(body)
+                    ref_idx = current_children.index(text_paras[i])
+                    body.insert(ref_idx + 1, chart_elem)
+                else:
+                    current_children = list(body)
+                    end_idx_current = next((idx for idx, child in enumerate(current_children) if child.tag == qn("w:p") and paragraph_text(child) == "5.2调研结果总结"), None)
+                    if end_idx_current is not None:
+                        body.insert(end_idx_current, chart_elem)
 
             content_root = ET.fromstring(zin.read("[Content_Types].xml"))
             existing_overrides = {
@@ -2270,7 +2297,8 @@ class TemplateRenderer:
         region = self.meta.get("region", "")
         product = self.meta.get("product", "")
         survey_period = self.meta.get("survey_period", "")
-        if not region and not product and not survey_period:
+        survey_period_display = self.meta.get("survey_period_display", survey_period)
+        if not region and not product and not survey_period_display:
             return
         
         # Map old → new from the template's original data
@@ -2293,8 +2321,9 @@ class TemplateRenderer:
                         text = data.decode("utf-8", errors="replace")
                         for old, new in replacements.items():
                             text = text.replace(old, new)
-                        if survey_period and item.filename == "word/document.xml":
-                            text = re.sub(r"调研时间：[^<]+", f"调研时间：{survey_period}", text)
+                        if survey_period_display and item.filename == "word/document.xml":
+                            text = re.sub(r"调研时间：[^<]+", f"调研时间：{survey_period_display}", text)
+                            text = re.sub(r"样本采集时间：[^<]+", f"样本采集时间：{survey_period_display}", text)
                         data = text.encode("utf-8")
                     zout.writestr(item, data)
         

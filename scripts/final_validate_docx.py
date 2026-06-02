@@ -473,6 +473,79 @@ def _validate_disclaimer_heading_xml(docx_path: Path) -> None:
     raise FinalValidationError("Missing disclaimer heading.")
 
 
+def _validate_no_leaked_none_values(texts: list[str]) -> None:
+    full_text = "\n".join(texts)
+    for token in ["None", "nan", "null", "NaN", "NULL", "N/A", "undefined"]:
+        if token in full_text:
+            raise FinalValidationError(f"Rendered report contains leaked placeholder value: {token}")
+
+
+def _validate_survey_period_display_format(texts: list[str], payload: dict) -> None:
+    survey_period_display = payload.get("meta", {}).get("survey_period_display", "")
+    if not survey_period_display:
+        return
+    full_text = "\n".join(texts)
+    for phrase in ["调研时间", "样本采集时间"]:
+        pattern = re.compile(rf"{phrase}[：:][^\n]+")
+        matches = pattern.findall(full_text)
+        for match in matches:
+            if "——" in match:
+                raise FinalValidationError(f"{phrase} uses raw format with '——' instead of display format: {match}")
+
+
+def _validate_service_provider_consistency(texts: list[str], payload: dict) -> None:
+    service_unit = payload.get("service", {}).get("unit", "")
+    disclaimer_unit = payload.get("disclaimer", {}).get("unit", "")
+    if not service_unit or not disclaimer_unit:
+        return
+    if service_unit != disclaimer_unit:
+        raise FinalValidationError(f"Service unit '{service_unit}' does not match disclaimer unit '{disclaimer_unit}'.")
+    full_text = "\n".join(texts)
+    if "项目名称" in full_text:
+        raise FinalValidationError("Report still contains unreplaced placeholder '项目名称'.")
+
+
+def _validate_51_text_chart_order(docx_path: Path, payload: dict) -> None:
+    key_issue_items = payload.get("summary", {}).get("key_issue_items", [])
+    if len(key_issue_items) < 2:
+        return
+    root, ns = _document_xml_root(docx_path)
+    paragraphs = root.findall(".//w:p", ns)
+    texts_in_doc = [_paragraph_text(p, ns) for p in paragraphs]
+
+    start_idx = next((i for i, t in enumerate(texts_in_doc) if t == "5.1问卷重点问题分析"), None)
+    end_idx = next((i for i, t in enumerate(texts_in_doc) if t == "5.2调研结果总结"), None)
+    if start_idx is None or end_idx is None:
+        return
+
+    sequence: list[str] = []
+    for i in range(start_idx + 1, end_idx):
+        p = paragraphs[i]
+        if p.findall(".//c:chart", {"c": "http://schemas.openxmlformats.org/drawingml/2006/chart"}):
+            sequence.append("chart")
+        elif p.findall(".//w:drawing", ns):
+            continue
+        else:
+            text_in_p = _paragraph_text(p, ns)
+            if text_in_p.strip():
+                sequence.append("text")
+
+    chart_count = sequence.count("chart")
+    text_count = sequence.count("text")
+
+    if chart_count != 2:
+        raise FinalValidationError(f"5.1 section should contain exactly 2 native charts, found {chart_count}.")
+    if text_count < 2:
+        raise FinalValidationError(f"5.1 section should contain at least 2 text paragraphs, found {text_count}.")
+
+    expected = ["text", "chart", "text", "chart"]
+    actual = [s for s in sequence if s in ("text", "chart")]
+    if actual != expected:
+        raise FinalValidationError(
+            f"5.1 section text/chart order must be text\u2192chart\u2192text\u2192chart, got: {'\u2192'.join(actual)}"
+        )
+
+
 def _validate_subtitle_formality(payload: dict) -> None:
     ORAL_INDICATORS = [
         r"^(您|你|我|他|她|它|咱们|大家)",
@@ -515,6 +588,10 @@ def validate_docx(docx_path: Path, payload: dict) -> None:
     _validate_png_chart_layout(docx_path, payload)
     _validate_font_xml(docx_path)
     _validate_disclaimer_heading_xml(docx_path)
+    _validate_no_leaked_none_values(texts)
+    _validate_survey_period_display_format(texts, payload)
+    _validate_service_provider_consistency(texts, payload)
+    _validate_51_text_chart_order(docx_path, payload)
 
 
 def main() -> None:
