@@ -28,10 +28,10 @@
 
 | 编号 | 测试项 | 命令 | 预期结果 |
 |------|--------|------|----------|
-| T2.1 | 正常加载 | `python3 -c "from scripts.build_payload import load_dimension_library; lib=load_dimension_library(); print(type(lib), len(lib['themes']))"` | `<class 'dict'> 24` |
+| T2.1 | 正常加载 | `python3 -c "from scripts.build_payload import load_dimension_library; lib=load_dimension_library(); print(type(lib), len(lib['themes']))"` | `<class 'dict'> 28` |
 | T2.2 | 缓存生效 | `python3 -c "from scripts.build_payload import load_dimension_library; a=load_dimension_library(); b=load_dimension_library(); print(a is b)"` | `True`（同一对象） |
 | T2.3 | 文件不存在时回退 | 先备份 JSON → 删除 → 调用 → 恢复。`python3 -c "import shutil, os; src='data/dimension_library.json'; dst='/tmp/_backup_dim.json'; shutil.copy(src,dst); os.remove(src); from scripts.build_payload import load_dimension_library; result=load_dimension_library(); shutil.move(dst,src); print(result)"` | `None` |
-| T2.4 | 主题名列表 | `python3 -c "from scripts.build_payload import load_dimension_library; lib=load_dimension_library(); print([t['theme_name'] for t in lib['themes']])"` | 包含源表中的 24 个主题 |
+| T2.4 | 主题名列表 | `python3 -c "from scripts.build_payload import load_dimension_library; lib=load_dimension_library(); print([t['theme_name'] for t in lib['themes']])"` | 包含源表中的 28 个主题 |
 
 ---
 

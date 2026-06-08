@@ -2409,6 +2409,365 @@
           ]
         }
       ]
+    },
+    {
+      "theme_name": "壮骨止痛胶囊药品认知度调研（患者）",
+      "dimensions": [
+        {
+          "name": "认知获取渠道",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "初次知晓药品的途径"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "获取药品相关信息的主要渠道"
+            }
+          ]
+        },
+        {
+          "name": "用药认知与掌握程度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "对药品功能主治的了解程度"
+            },
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "对药品服药方法的掌握程度"
+            }
+          ]
+        },
+        {
+          "name": "用药动机与使用评价",
+          "subtopics": [
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "选择使用本品的关键诱因"
+            },
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "对药品实际治疗效果的评价"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "向同类患者推荐药品的意愿"
+            }
+          ]
+        },
+        {
+          "name": "选购偏好与信息需求",
+          "subtopics": [
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "希望补充了解的药品相关信息方向"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "购药时对药品生产厂家的关注程度"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "对药品市场整体知名度的评价"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "壮骨止痛胶囊-用药体验及症状改善效果调研-患者",
+      "dimensions": [
+        {
+          "name": "用药前症状基线",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "初始不适症状类型"
+            },
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "服药前疼痛严重程度"
+            }
+          ]
+        },
+        {
+          "name": "症状改善效果评价",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "整体疼痛症状改善情况"
+            },
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "晨起关节僵硬改善情况"
+            },
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "用药后睡眠质量变化"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "日常活动能力改善情况"
+            },
+            {
+              "question_numbers": [
+                12
+              ],
+              "subtitle": "长期骨骼关节养护效果评价"
+            }
+          ]
+        },
+        {
+          "name": "用药体验与联用情况",
+          "subtopics": [
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "服药后肠胃不适等不良反应情况"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "服药频次与剂量的便捷度感受"
+            },
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "连续用药时长"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "与其他止痛药物的整体使用对比"
+            },
+            {
+              "question_numbers": [
+                11
+              ],
+              "subtitle": "是否配合理疗、膏药等其他干预方式"
+            }
+          ]
+        },
+        {
+          "name": "使用口碑与改进建议",
+          "subtopics": [
+            {
+              "question_numbers": [
+                13
+              ],
+              "subtitle": "向同类患者的推荐意愿"
+            },
+            {
+              "question_numbers": [
+                14
+              ],
+              "subtitle": "希望产品优化改进的方向"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "壮骨止痛胶囊的可及性与价格敏感度调查",
+      "dimensions": [
+        {
+          "name": "个人基本信息与医保情况",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "受访者职业类型"
+            },
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "医疗费用主要支付方式"
+            }
+          ]
+        },
+        {
+          "name": "信息获取与购买行为",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "首次知晓药品的渠道"
+            },
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "常规购药渠道"
+            },
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "药品购买频率"
+            },
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "影响购买的主要因素"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "药品成分信息了解途径"
+            }
+          ]
+        },
+        {
+          "name": "价格感知与可及性诉求",
+          "subtopics": [
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "影响价格接受度的主要因素"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "价格方面的改进期望"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "提升药品可及性的建议"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "theme_name": "（壮骨止痛胶囊）原发性骨质疏松领域药品需求调查（患者）",
+      "dimensions": [
+        {
+          "name": "用药选择与新药接受度",
+          "subtopics": [
+            {
+              "question_numbers": [
+                1
+              ],
+              "subtitle": "选择当前用药的主要原因"
+            },
+            {
+              "question_numbers": [
+                2
+              ],
+              "subtitle": "尝试新型治疗药物的意愿"
+            }
+          ]
+        },
+        {
+          "name": "购药偏好与价格感知",
+          "subtopics": [
+            {
+              "question_numbers": [
+                3
+              ],
+              "subtitle": "现有治疗药物价格合理性评价"
+            },
+            {
+              "question_numbers": [
+                4
+              ],
+              "subtitle": "主要购药渠道"
+            },
+            {
+              "question_numbers": [
+                5
+              ],
+              "subtitle": "购药时对药品品牌的关注程度"
+            }
+          ]
+        },
+        {
+          "name": "用药形式与周期体验",
+          "subtopics": [
+            {
+              "question_numbers": [
+                6
+              ],
+              "subtitle": "对便捷化服药方式的需求"
+            },
+            {
+              "question_numbers": [
+                7
+              ],
+              "subtitle": "对现有药物治疗周期的评价"
+            }
+          ]
+        },
+        {
+          "name": "用药安全认知与功能诉求",
+          "subtopics": [
+            {
+              "question_numbers": [
+                8
+              ],
+              "subtitle": "对药物相互作用的了解程度"
+            },
+            {
+              "question_numbers": [
+                9
+              ],
+              "subtitle": "用药过程中咨询药师的情况"
+            },
+            {
+              "question_numbers": [
+                10
+              ],
+              "subtitle": "对药物改善骨质疏松伴随症状的需求"
+            }
+          ]
+        }
+      ]
     }
   ]
 }

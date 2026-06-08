@@ -1463,7 +1463,7 @@ class PipelineTest(unittest.TestCase):
             library,
         )
         self.assertIsNotNone(theme_entry)
-        self.assertEqual(len(library["themes"]), 24)
+        self.assertEqual(len(library["themes"]), 28)
         self.assertEqual([dim["name"] for dim in theme_entry["dimensions"]], [
             "价格感知与效果匹配",
             "价格变动影响",
@@ -1492,6 +1492,44 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(section_refs["4.2"], ["q05", "q09", "q12"])
         self.assertEqual(section_refs["4.3"], ["q06", "q07", "q08", "q10", "q11"])
         self.assertEqual(section_refs["4.4"], ["q13", "q14"])
+
+    def test_fixed_dimensions_include_zhuangguzhitong_themes(self) -> None:
+        library = load_dimension_library()
+        theme_entry = resolve_theme(
+            {},
+            {"theme": "壮骨止痛胶囊药品认知度调研（患者）"},
+            Namespace(theme=None),
+            library,
+        )
+        self.assertIsNotNone(theme_entry)
+        self.assertEqual([dim["name"] for dim in theme_entry["dimensions"]], [
+            "认知获取渠道",
+            "用药认知与掌握程度",
+            "用药动机与使用评价",
+            "选购偏好与信息需求",
+        ])
+
+        questionnaire = {
+            "question_count": 10,
+            "questions": [
+                {"number": number, "question": f"第{number}题", "options": []}
+                for number in range(1, 11)
+            ],
+        }
+        ai_dimensions = fixed_dimensions_to_ai(theme_entry, questionnaire)
+        grouped = cluster_dimensions(questionnaire, ai_dimensions=ai_dimensions)
+        section_refs = {
+            section["section_number"]: [
+                ref
+                for subtopic in section["subtopics"]
+                for ref in subtopic["question_refs"]
+            ]
+            for section in grouped["sections"]
+        }
+        self.assertEqual(section_refs["4.1"], ["q01", "q07"])
+        self.assertEqual(section_refs["4.2"], ["q03", "q04"])
+        self.assertEqual(section_refs["4.3"], ["q02", "q05", "q06"])
+        self.assertEqual(section_refs["4.4"], ["q08", "q09", "q10"])
 
     def test_ai_dimensions_build_payload_integration(self) -> None:
         ai_dimensions = dynamic_ai_dimensions()
