@@ -316,13 +316,19 @@ def _pad_text(question_type: str, text: str) -> str:
         ],
     }
     padded = text
-    candidates = fillers.get(question_type, fillers["generic"])
-    index = 0
-    while len(padded) < MIN_ANALYSIS_CHARS and index < len(candidates) * 2:
-        filler = candidates[index % len(candidates)]
+    candidates = [
+        *fillers.get(question_type, fillers["generic"]),
+        "同时，区域差异和个体管理条件仍需纳入后续观察。",
+        "相关支持应根据实际反馈持续校正，避免采用单一处理方式。",
+        "这有助于把统计结论转化为更清晰的患者管理依据。",
+    ]
+    for filler in candidates:
+        if len(padded) >= MIN_ANALYSIS_CHARS:
+            break
+        if filler in padded:
+            continue
         if len(padded) + len(filler) <= MAX_ANALYSIS_CHARS:
             padded = f"{padded}{filler}"
-        index += 1
     return padded
 
 

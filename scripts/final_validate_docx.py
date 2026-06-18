@@ -12,8 +12,10 @@ from zipfile import ZipFile
 from docx import Document
 
 try:
+    from .build_payload import prose_quality_issues
     from .expression_data import MAX_ANALYSIS_CHARS, MIN_ANALYSIS_CHARS
 except ImportError:
+    from build_payload import prose_quality_issues
     from expression_data import MAX_ANALYSIS_CHARS, MIN_ANALYSIS_CHARS
 
 
@@ -117,6 +119,12 @@ def _validate_analysis_paragraphs(texts: list[str], payload: dict) -> None:
                     raise FinalValidationError(f"Analysis paragraph lacks numeric percentage after subtitle: {subtopic.get('subtitle', '')}")
                 if len(paragraph) < MIN_ANALYSIS_CHARS or len(paragraph) > MAX_ANALYSIS_CHARS:
                     raise FinalValidationError(f"Analysis paragraph length invalid after subtitle: {subtopic.get('subtitle', '')}")
+                quality_issues = prose_quality_issues(paragraph)
+                if quality_issues:
+                    raise FinalValidationError(
+                        f"Analysis prose quality invalid after subtitle: {subtopic.get('subtitle', '')}: "
+                        + "；".join(quality_issues)
+                    )
 
 
 def _analysis_opening(text: str) -> str:
@@ -416,6 +424,20 @@ def _validate_ai_summary_text(texts: list[str], payload: dict) -> None:
         if forbidden in joined_recommendations:
             raise FinalValidationError("5.3 contains old template recommendation wording.")
 
+    summary_groups = {
+        "5.1": payload.get("summary", {}).get("key_issue_analysis", []),
+        "5.2": expected_overall,
+        "5.3": expected_recommendations,
+    }
+    for section_name, paragraphs in summary_groups.items():
+        for index, paragraph in enumerate(paragraphs, start=1):
+            issues = prose_quality_issues(str(paragraph))
+            if issues:
+                raise FinalValidationError(
+                    f"{section_name} prose quality invalid at paragraph {index}: "
+                    + "；".join(issues)
+                )
+
 
 def _validate_font_xml(docx_path: Path) -> None:
     ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
@@ -584,6 +606,10 @@ def _validate_subtitle_formality(payload: dict) -> None:
             subtitle = str(subtopic.get("subtitle", "")).strip()
             if not subtitle:
                 continue
+            if re.match(r"^(?:[（(]\d+[）)]\s*)?\d+(?:\.\d+){1,}", subtitle):
+                raise FinalValidationError(f"副标题包含章节编号: '{subtitle}'")
+            if re.search(r"(?:[-—–－_]{1,2}\s*)?q\d+\s*$", subtitle, re.IGNORECASE):
+                raise FinalValidationError(f"副标题包含内部题号: '{subtitle}'")
             for pattern in ORAL_INDICATORS:
                 if re.search(pattern, subtitle):
                     raise FinalValidationError(

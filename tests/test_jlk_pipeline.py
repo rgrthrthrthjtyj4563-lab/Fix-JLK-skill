@@ -707,6 +707,22 @@ class PipelineTest(unittest.TestCase):
         self.assertIn("4.1.1 血压控制效果分析", joined)
         self.assertIn("use ####", joined)
 
+    def test_parser_normalizes_decorated_level_4_subtopic_heading(self) -> None:
+        markdown = sample_markdown().replace(
+            "#### 血压控制效果分析",
+            "#### 4.1.1 血压控制效果分析——q01",
+            1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(markdown, encoding="utf-8")
+            _, content = parse_markdown_content(report_content)
+
+        self.assertEqual(
+            content["result_analysis"][0]["subtopics"][0]["subtitle"],
+            "血压控制效果分析",
+        )
+
     def test_preflight_explains_unsupported_level_1_heading(self) -> None:
         markdown = sample_markdown().replace("## 前言", "# 前言", 1)
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3068,6 +3084,52 @@ class PreflightErrorMessageFormatTest(unittest.TestCase):
         self.assertIn("4.2 / q03 / 用药行为分析", msg)
         self.assertIn("2", msg)
         self.assertIn("1", msg)
+
+    def test_4x_rejects_overlong_sentence(self) -> None:
+        from scripts.build_payload import require_ai_analysis_paragraphs
+
+        paragraph = (
+            "数据显示39.13%的患者能够按照既定方案完成日常管理，说明主流反馈已经形成较稳定的执行基础，"
+            "患者对相关要求的理解、记录、复诊沟通和风险识别均表现出一定一致性，且在不同生活场景下仍能"
+            "维持相对连续的行为节奏，但少数人面对工作变化、外出安排和信息不足时可能出现执行松动，"
+            "需要结合个体情况持续观察并及时解释。"
+            "其余反馈显示少数患者仍存在理解偏差。"
+            "后续需通过随访沟通巩固已有基础，并针对波动人群补充清晰的执行提示和记录工具，"
+            "使患者能够在不同场景中保持稳定行为，同时结合家庭支持和复诊计划持续评估执行变化与实际效果。"
+        )
+        self.assertGreaterEqual(len(paragraph), 250)
+        self.assertLessEqual(len(paragraph), 300)
+
+        with self.assertRaisesRegex(ValueError, "单句"):
+            require_ai_analysis_paragraphs(
+                [paragraph],
+                section_number="4.1",
+                question_ref="q01",
+                subtitle="血压控制效果分析",
+            )
+
+    def test_4x_rejects_redundant_stock_closing(self) -> None:
+        from scripts.build_payload import require_ai_analysis_paragraphs
+
+        paragraph = (
+            "数据显示39.13%的患者已形成稳定执行基础，说明当前管理要求能够被多数人理解并落实。"
+            "少数患者仍会受到生活节奏、信息来源和复诊衔接影响，需要结合真实场景继续观察。"
+            "后续需通过随访表和沟通记录识别波动人群，并补充清晰的解释材料，使既有认知转化为连续行动。"
+            "该维度的反馈表现良好且后续优化方向明确可操作。"
+            "该维度的反馈表现良好且后续优化方向明确可操作。"
+            "同时还要结合患者年龄、既往经验和家庭支持差异安排分层沟通，确保关键要求能够被准确理解并长期执行，"
+            "并通过复诊反馈持续校正支持内容，形成记录、解释和跟踪相互衔接的管理闭环。"
+        )
+        self.assertGreaterEqual(len(paragraph), 250)
+        self.assertLessEqual(len(paragraph), 300)
+
+        with self.assertRaisesRegex(ValueError, "重复|套话"):
+            require_ai_analysis_paragraphs(
+                [paragraph],
+                section_number="4.1",
+                question_ref="q01",
+                subtitle="血压控制效果分析",
+            )
 
     def test_5_1_error_preserves_analytical_judgment_phrase(self) -> None:
         from scripts.build_payload import choose_key_issue_analysis

@@ -310,6 +310,15 @@ def strip_markdown_heading_prefix(text: str) -> str:
     return re.sub(r"^\s{0,3}#{1,6}\s*", "", str(text).strip())
 
 
+def normalize_subtopic_title(text: str) -> str:
+    """Return the semantic subtitle without numbering or internal question refs."""
+    normalized = normalize_space(strip_markdown_heading_prefix(text))
+    normalized = re.sub(r"^[（(]\d+[）)]\s*", "", normalized)
+    normalized = re.sub(r"^\d+(?:\.\d+){1,}\s*", "", normalized)
+    normalized = re.sub(r"\s*(?:[-—–－_]{1,2}\s*)?q\d+\s*$", "", normalized, flags=re.IGNORECASE)
+    return normalized.strip(" \t-—–－_")
+
+
 def parse_markdown_content(path: Path) -> tuple[dict, dict]:
     meta, body = split_front_matter(path.read_text(encoding="utf-8"))
     lines = body.splitlines()
@@ -403,7 +412,11 @@ def parse_markdown_content(path: Path) -> tuple[dict, dict]:
             if level >= 4 and current_result_section:
                 flush_subtopic()
                 current_section = "result_analysis"
-                current_subtopic = {"title": title, "lines": [], "subtitle": re.sub(r"^（\d+）\s*", "", title).strip()}
+                current_subtopic = {
+                    "title": title,
+                    "lines": [],
+                    "subtitle": normalize_subtopic_title(title),
+                }
                 continue
             if re.match(r"5\.1", title):
                 flush_result_section()
@@ -649,6 +662,39 @@ def choose_analysis_paragraphs(content: list[str], fallback: list[str]) -> list[
     return fallback
 
 
+MAX_PROSE_SENTENCE_CHARS = 110
+FORBIDDEN_STOCK_CLOSINGS = (
+    "该维度的反馈表现良好且后续优化方向明确可操作",
+    "后续优化方向明确可操作",
+)
+
+
+def prose_quality_issues(text: str, max_sentence_chars: int = MAX_PROSE_SENTENCE_CHARS) -> list[str]:
+    """Detect readability and redundant-closing defects in AI-authored prose."""
+    normalized = normalize_space(text)
+    issues: list[str] = []
+    sentences = [
+        sentence.strip(" ，,、")
+        for sentence in re.split(r"[。！？!?；;]+", normalized)
+        if sentence.strip(" ，,、")
+    ]
+    longest = max((len(sentence) for sentence in sentences), default=0)
+    if longest > max_sentence_chars:
+        issues.append(
+            f"存在 {longest} 字超长单句，单句不得超过 {max_sentence_chars} 字；"
+            "请拆分为结论、解释和收束句。"
+        )
+    if re.search(r"[，。！？；、,.!?;]{2,}", normalized):
+        issues.append("存在连续或多余标点；请清理重复标点。")
+    if any(phrase in normalized for phrase in FORBIDDEN_STOCK_CLOSINGS):
+        issues.append("结尾包含通用套话；请改为与本题数据直接对应的收束判断。")
+
+    canonical = [re.sub(r"[\s，,、]+", "", sentence) for sentence in sentences]
+    if len(canonical) != len(set(canonical)):
+        issues.append("段内存在重复句；请删除语义雷同的结尾或合并重复判断。")
+    return issues
+
+
 def require_ai_analysis_paragraphs(
     content: list[str],
     section_number: str,
@@ -693,7 +739,8 @@ def require_ai_analysis_paragraphs(
         )
     text = normalized[0]
     char_count = len(text)
-    if not ed_is_complete(text):
+    prose_issues = prose_quality_issues(text)
+    if not ed_is_complete(text) or prose_issues:
         # Provide specific diagnostics following "章节/题号/小标题：实际值；期望值；修改方法"
         issues = []
         if char_count < ED_MIN:
@@ -714,6 +761,7 @@ def require_ai_analysis_paragraphs(
             issues.append("包含禁用模式（A/B/C/D 字母选项等）；请改用选项语义表述。")
         if not re.search(_NUMERIC_PERCENT, text):
             issues.append("缺少数字百分比（如 39.13%）；请在正文中标注关键数据的百分比。")
+        issues.extend(prose_issues)
         detail = "；".join(issues) if issues else "未知原因，请检查格式是否满足全部规则。"
         raise ValueError(
             f"{section_number} / {question_ref} / {subtitle}：{detail}"
@@ -1080,6 +1128,12 @@ def choose_key_issue_analysis(ai_paragraphs: list[str], expected_count: int) -> 
                     "contains fixed programmatic wording；"
                     "请移除程序化固定句式，改用个性化分析。"
                 )
+        issues = prose_quality_issues(paragraph)
+        if issues:
+            raise ValueError(
+                f"5.1问卷重点问题分析 / 第 {index} 段："
+                + "；".join(issues)
+            )
     return paragraphs
 
 
@@ -1535,6 +1589,10 @@ def choose_overall_analysis(
         raise ValueError(
             "5.2调研结果总结：缺少 analytical judgment（需包含说明/表明/反映/提示/判断之一）；请在正文中加入分析判断词。"
         )
+    for index, paragraph in enumerate(normalized, start=1):
+        issues = prose_quality_issues(paragraph)
+        if issues:
+            raise ValueError(f"5.2调研结果总结 / 第 {index} 段：" + "；".join(issues))
     return normalized
 
 
@@ -1603,6 +1661,10 @@ def choose_recommendations(ai_paragraphs: list[str], fallback: list[str]) -> lis
             "/记录表/短视频/沟通群/宣传册/流程单/闹钟/药师/门诊/药店/台账/贴之一）；"
             "请在每条建议中加入具体的工具或载体。"
         )
+    for index, paragraph in enumerate(normalized, start=1):
+        issues = prose_quality_issues(paragraph)
+        if issues:
+            raise ValueError(f"5.3建议 / 第 {index} 段：" + "；".join(issues))
     return normalized
 
 
@@ -1668,7 +1730,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             st_idx = st["subtopic_index"]
             ai_st = ai_st_by_idx.get(st_idx, {})
 
-            subtitle = ai_st.get("subtitle") or st.get("subtitle", "")
+            subtitle = normalize_subtopic_title(ai_st.get("subtitle") or st.get("subtitle", ""))
             question_ref_label = refs[0] if refs else "unknown"
             analysis = require_ai_analysis_paragraphs(
                 ai_st.get("paragraphs", []),
