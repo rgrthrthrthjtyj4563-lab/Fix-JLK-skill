@@ -1359,6 +1359,17 @@ class PipelineTest(unittest.TestCase):
             with self.assertRaisesRegex(FinalValidationError, "Unexpected font"):
                 validate_docx(font_docx, payload)
 
+            placeholder_docx = Path(temp_dir) / "bad-placeholder.docx"
+            copy_docx_with_document_xml_replace(
+                output_docx,
+                placeholder_docx,
+                payload["report_title"],
+                "{{field.report_title}}",
+                count=1,
+            )
+            with self.assertRaisesRegex(FinalValidationError, "placeholder"):
+                validate_docx(placeholder_docx, payload)
+
     def test_derive_preface_and_background_follow_template_rules(self) -> None:
         preface = derive_preface("厄贝沙坦氢氯噻嗪片", "北京市", "1789")
         background = derive_project_background("厄贝沙坦氢氯噻嗪片", "北京市")
@@ -1947,6 +1958,20 @@ class PipelineEntrypointTest(unittest.TestCase):
             self.assertIn("synthetic validation failure", payload["error"])
             self.assertEqual(Path(payload["run_dir"]).resolve(), run_dir.resolve())
 
+    def test_template_preflight_failure_is_written_and_raised_before_render(self) -> None:
+        from scripts.run_report_pipeline import run_template_preflight
+        from scripts.template_preflight import TemplatePreflightError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            with self.assertRaises(TemplatePreflightError):
+                run_template_preflight({"meta": {}}, run_dir)
+            result_path = run_dir / "template_preflight.json"
+            self.assertTrue(result_path.exists())
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(result["mode"], "fail")
+            self.assertEqual(result["status"], "error")
+
 
 class TemplateContractTest(unittest.TestCase):
     """Cover Task 2: scripts/template_contract.py manifest loader."""
@@ -1988,11 +2013,10 @@ class TemplateContractTest(unittest.TestCase):
         )
         self.assertIn("meta.product", contract.required_payload_paths)
         self.assertEqual(
-            contract.allowed_chart_modes["result_overview_charts"], ("image",)
+            contract.allowed_chart_modes["result_analysis.overview_charts"],
+            ("image",),
         )
-        self.assertEqual(
-            contract.allowed_chart_modes["key_issue_charts"], ("office",)
-        )
+        self.assertIn("word/charts/chart1.xml", contract.required_parts)
 
     def test_rejects_missing_required_field(self) -> None:
         from scripts.template_contract import load_manifest, ContractError
@@ -2304,6 +2328,71 @@ class TemplatePreflightTest(unittest.TestCase):
                 preflight_template(contract, {}, mode="fail")
             self.assertEqual(ctx.exception.errors[0]["code"], "MISSING_PAYLOAD_PATH")
 
+    def test_preflight_flags_payload_template_type_mismatch(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp),
+                "<w:p/>",
+                manifest_overrides={
+                    "required_payload_paths": [],
+                    "payload_template_types": ["用药体验与疗效反馈"],
+                },
+            )
+            result = preflight_template(
+                load_manifest(manifest_path),
+                {"meta": {"template_type": "依从性与用药习惯"}},
+                mode="warning",
+            )
+            self.assertIn(
+                "TEMPLATE_TYPE_MISMATCH",
+                {error["code"] for error in result["errors"]},
+            )
+
+    def test_preflight_flags_declared_payload_type(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp),
+                "<w:p/>",
+                manifest_overrides={
+                    "required_payload_paths": ["items"],
+                    "payload_path_types": {"items": "list"},
+                },
+            )
+            result = preflight_template(
+                load_manifest(manifest_path),
+                {"items": "not-a-list"},
+                mode="warning",
+            )
+            self.assertIn(
+                "INVALID_PAYLOAD_TYPE",
+                {error["code"] for error in result["errors"]},
+            )
+
+    def test_preflight_flags_missing_required_ooxml_part(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp),
+                "<w:p/>",
+                manifest_overrides={
+                    "required_payload_paths": [],
+                    "required_parts": ["word/charts/chart1.xml"],
+                },
+            )
+            result = preflight_template(load_manifest(manifest_path), {}, mode="warning")
+            self.assertIn(
+                "MISSING_CHART_PART",
+                {error["code"] for error in result["errors"]},
+            )
+
     def test_preflight_runs_against_bundled_efficacy_manifest(self) -> None:
         """The shipped efficacy manifest should preflight clean against a
         minimally-populated payload while the migration is still in flight."""
@@ -2317,7 +2406,12 @@ class TemplatePreflightTest(unittest.TestCase):
                 "product": "测试产品",
                 "region": "测试地区",
                 "template_doc": str(contract.template_path),
+                "template_type": "用药体验与疗效反馈",
+                "survey_period_display": "2026年01月01日-01月31日",
+                "sample_size": 100,
             },
+            "header_text": "测试报告",
+            "report_title": "测试报告",
             "service": {
                 "unit": "测试服务商",
                 "date": "2026-01-01",
@@ -2330,20 +2424,31 @@ class TemplatePreflightTest(unittest.TestCase):
                 "items": ["item"],
                 "closing": "closing",
             },
-            "result_analysis": {"sections": [{"subtopics": ["item"]}]},
+            "result_analysis": {
+                "intro": ["intro"],
+                "overview_charts": [
+                    {"render_mode": "image"},
+                    {"render_mode": "image"},
+                ],
+                "sections": [{"subtopics": ["item"]}],
+            },
             "summary": {
                 "overall_analysis": ["overall"],
                 "recommendations": ["recommendation"],
                 "key_issue_items": [{"paragraph": "key issue"}],
             },
-            "attachments": {"attachment1_questions": [{"question": "q"}]},
+            "attachments": {
+                "attachment1_name": "测试问卷",
+                "attachment1_questions": [{"question": "q"}],
+                "attachment2_name": "问卷调查明细表",
+            },
             "disclaimer": {"items": ["item"]},
         }
         result = preflight_template(contract, payload, mode="warning")
         # The bundled template contains Task 5 fields plus Task 6 block
         # singletons and must preflight clean for a complete minimal payload.
         self.assertEqual(result["status"], "ok", msg=result)
-        self.assertEqual(result["metrics"]["distinct_placeholders"], 16)
+        self.assertEqual(result["metrics"]["distinct_placeholders"], 24)
 
 
 class TemplateEngineTest(unittest.TestCase):
@@ -2527,8 +2632,13 @@ class FieldPlaceholderTemplateTest(unittest.TestCase):
         "{{field.meta.region}}",
         "{{field.meta.survey_period_display}}",
         "{{field.meta.sample_size}}",
+        "{{field.report_title}}",
+        "{{field.header_text}}",
         "{{field.service.unit}}",
         "{{field.service.date}}",
+        "{{field.attachments.attachment1_name}}",
+        "{{field.attachments.attachment2_name}}",
+        "{{field.attachments.attachment2_filename}}",
     )
 
     def test_bundled_template_contains_all_field_placeholders(self) -> None:
@@ -2561,9 +2671,15 @@ class FieldPlaceholderTemplateTest(unittest.TestCase):
                 "survey_period_display": "2025年7月1日—7月31日",
                 "sample_size": 1234,
             },
+            "report_title": "心达康胶囊问卷调研分析报告",
+            "header_text": "心达康胶囊问卷调研分析报告",
             "service": {
                 "unit": "测试服务商",
                 "date": "2026-02-15",
+            },
+            "attachments": {
+                "attachment1_name": "心达康胶囊患者调查问卷",
+                "attachment2_name": "问卷调查明细表",
             },
         }
         renderer = TemplateRenderer(template_path, payload)
@@ -2572,8 +2688,13 @@ class FieldPlaceholderTemplateTest(unittest.TestCase):
             "field.meta.region": payload["meta"]["region"],
             "field.meta.survey_period_display": payload["meta"]["survey_period_display"],
             "field.meta.sample_size": str(payload["meta"]["sample_size"]),
+            "field.report_title": payload["report_title"],
+            "field.header_text": payload["header_text"],
             "field.service.unit": payload["service"]["unit"],
             "field.service.date": payload["service"]["date"],
+            "field.attachments.attachment1_name": payload["attachments"]["attachment1_name"],
+            "field.attachments.attachment2_name": payload["attachments"]["attachment2_name"],
+            "field.attachments.attachment2_filename": "明细文件",
         })
         self.assertGreater(replaced, 0, "expected at least one replacement")
 
@@ -2755,6 +2876,26 @@ class RepeatPlaceholderTemplateTest(unittest.TestCase):
                 ["4.1 维度1", "4.2 维度2", "4.3 维度3"],
             )
             self.assertNotIn("{{repeat.result_sections}}", texts)
+
+
+class TemplateCleanupTest(unittest.TestCase):
+    """Cover Task 9 cleanup gates."""
+
+    def test_bundled_template_contains_overview_media_anchors(self) -> None:
+        from scripts.template_preflight import scan_template_placeholders
+
+        occurrences = scan_template_placeholders(
+            ROOT / "templates" / "efficacy-report-template.docx"
+        )
+        self.assertEqual(len(occurrences.get("{{media.overview_pie}}", [])), 1)
+        self.assertEqual(len(occurrences.get("{{media.overview_bar}}", [])), 1)
+
+    def test_renderer_no_longer_contains_legacy_business_locators(self) -> None:
+        source = (ROOT / "scripts" / "render_from_template.py").read_text(encoding="utf-8")
+        self.assertNotIn("self.body[24]", source)
+        self.assertNotIn('replacements["广东省"]', source)
+        self.assertNotIn('replacements["厄贝沙坦氢氯噻嗪片"]', source)
+        self.assertNotIn("def _global_replace_in_xml", source)
 
 
 if __name__ == "__main__":

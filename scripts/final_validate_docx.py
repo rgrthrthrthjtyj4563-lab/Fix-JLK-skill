@@ -480,6 +480,26 @@ def _validate_no_leaked_none_values(texts: list[str]) -> None:
             raise FinalValidationError(f"Rendered report contains leaked placeholder value: {token}")
 
 
+def _validate_no_template_residue(docx_path: Path, payload: dict) -> None:
+    visible_parts: list[str] = []
+    with ZipFile(docx_path) as zipped:
+        for name in zipped.namelist():
+            if not re.match(r"word/(document|header\d+|footer\d+)\.xml$", name):
+                continue
+            xml = zipped.read(name).decode("utf-8", errors="replace")
+            visible_parts.append(re.sub(r"<[^>]+>", "", xml))
+    full_text = "\n".join(visible_parts)
+    if "{{" in full_text or "}}" in full_text:
+        raise FinalValidationError("Rendered report contains unresolved template placeholder.")
+
+    product = str(payload.get("meta", {}).get("product", "") or "")
+    region = str(payload.get("meta", {}).get("region", "") or "")
+    if product and product != "厄贝沙坦氢氯噻嗪片" and "厄贝沙坦氢氯噻嗪片" in full_text:
+        raise FinalValidationError("Rendered report contains stale template product data.")
+    if region and region != "广东省" and "广东省" in full_text:
+        raise FinalValidationError("Rendered report contains stale template region data.")
+
+
 def _validate_survey_period_display_format(texts: list[str], payload: dict) -> None:
     survey_period_display = payload.get("meta", {}).get("survey_period_display", "")
     if not survey_period_display:
@@ -589,6 +609,7 @@ def validate_docx(docx_path: Path, payload: dict) -> None:
     _validate_font_xml(docx_path)
     _validate_disclaimer_heading_xml(docx_path)
     _validate_no_leaked_none_values(texts)
+    _validate_no_template_residue(docx_path, payload)
     _validate_survey_period_display_format(texts, payload)
     _validate_service_provider_consistency(texts, payload)
     _validate_51_text_chart_order(docx_path, payload)

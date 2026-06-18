@@ -156,6 +156,38 @@ def finalize_with_validation(output_docx: Path, payload: dict, run_dir: Path) ->
         raise PipelineFinalValidationError(message, run_dir) from exc
 
 
+def run_template_preflight(payload: dict, run_dir: Path) -> dict:
+    """Run the bundled template contract in fail-fast mode and persist it."""
+    manifest_path = ROOT / "templates" / "efficacy" / "manifest.json"
+    result_path = run_dir / "template_preflight.json"
+    try:
+        contract = load_manifest(manifest_path)
+        result = preflight_template(contract, payload, mode="fail")
+    except TemplatePreflightError as exc:
+        result_path.write_text(
+            json.dumps(exc.result, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        raise
+    except ContractError as exc:
+        result = {
+            "status": "error",
+            "mode": "fail",
+            "errors": [{"code": exc.code, "message": str(exc)}],
+            "warnings": [],
+        }
+        result_path.write_text(
+            json.dumps(result, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        raise
+    result_path.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the patient report pipeline in an isolated per-run directory.")
     parser.add_argument("questionnaire_xlsx")
@@ -213,35 +245,13 @@ def main() -> None:
         payload_json = run_dir / "report_payload.json"
         payload_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # template_preflight: load the bundled manifest and validate the rendered
-    # contract against payload + template docx. While Tasks 5-8 are still
-    # injecting placeholders, run in 'warning' mode so any contract gap is
-    # written to template_preflight.json without aborting the render. Once
-    # all placeholders are migrated this should be flipped to 'fail'.
     with timer.phase("template_preflight"):
-        manifest_path = ROOT / "templates" / "efficacy" / "manifest.json"
-        template_preflight_json = run_dir / "template_preflight.json"
         try:
-            contract = load_manifest(manifest_path)
-            preflight_doc = preflight_template(contract, payload, mode="warning")
-        except ContractError as exc:
-            preflight_doc = {
-                "status": "error",
-                "mode": "warning",
-                "errors": [{"code": exc.code, "message": str(exc)}],
-                "warnings": [],
-            }
-            print(f"TEMPLATE_PREFLIGHT_WARNING: {exc}", file=sys.stderr)
-        template_preflight_json.write_text(
-            json.dumps(preflight_doc, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        if preflight_doc.get("errors"):
-            print(
-                f"TEMPLATE_PREFLIGHT_WARNING: {len(preflight_doc['errors'])} issue(s); see "
-                f"{template_preflight_json.resolve()}",
-                file=sys.stderr,
-            )
+            run_template_preflight(payload, run_dir)
+        except (ContractError, TemplatePreflightError) as exc:
+            print(f"TEMPLATE_PREFLIGHT_FAILED: {exc}", file=sys.stderr)
+            print(f"Run directory retained for diagnosis: {run_dir.resolve()}", file=sys.stderr)
+            sys.exit(1)
 
     output_docx = Path(args.output_docx) if args.output_docx else run_dir / "report.docx"
     output_docx.parent.mkdir(parents=True, exist_ok=True)

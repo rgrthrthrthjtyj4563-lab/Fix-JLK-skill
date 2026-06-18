@@ -40,10 +40,7 @@ try:
         overwrite_paragraph_text_preserve_run_style as _overwrite_paragraph_text_preserve_run_style,
         paragraph_has_drawing as _paragraph_has_drawing,
         replace_text_across_runs as _replace_text_across_runs,
-        replace_text_in_paragraph as _replace_text_in_paragraph,
-        safe_replace_in_paragraph as _engine_safe_replace_in_paragraph,
         set_paragraph_text as _set_paragraph_text,
-        set_run_text as _set_run_text,
     )
 except ImportError:  # pragma: no cover - script-style import
     from template_engine import (
@@ -52,10 +49,7 @@ except ImportError:  # pragma: no cover - script-style import
         overwrite_paragraph_text_preserve_run_style as _overwrite_paragraph_text_preserve_run_style,
         paragraph_has_drawing as _paragraph_has_drawing,
         replace_text_across_runs as _replace_text_across_runs,
-        replace_text_in_paragraph as _replace_text_in_paragraph,
-        safe_replace_in_paragraph as _engine_safe_replace_in_paragraph,
         set_paragraph_text as _set_paragraph_text,
-        set_run_text as _set_run_text,
     )
 
 
@@ -83,7 +77,7 @@ _register_namespaces()
 # ─── Helper: OOXML manipulation ──────────────────────────────────────────────
 # The cross-run text primitives (_get_paragraph_text, _set_paragraph_text,
 # _overwrite_paragraph_text_preserve_run_style, _paragraph_has_drawing,
-# _set_run_text, _replace_text_across_runs, _replace_text_in_paragraph) live
+# _replace_text_across_runs) live
 # in scripts/template_engine.py and are imported above. Only renderer-specific
 # helpers remain in this module.
 
@@ -454,14 +448,6 @@ class TemplateRenderer:
                 return i
         return None
 
-    def _normalize_summary_heading(self):
-        """Migrate legacy template heading text to the current 5.2 contract."""
-        old_idx = self._find_exact_paragraph_index("5.2调研结果分析")
-        new_idx = self._find_exact_paragraph_index("5.2调研结果总结")
-        if old_idx is not None and new_idx is None:
-            _set_paragraph_text(self._get_paragraph_at(old_idx), "5.2调研结果总结")
-            self._rebuild_anchors()
-
     def _find_paragraph_prefix_index(self, text_prefix: str, start: int = 0) -> Optional[int]:
         for i, info in self.anchors.items():
             if i < start:
@@ -487,21 +473,11 @@ class TemplateRenderer:
     # ─── Section 1: Header ───────────────────────────────────────────────
 
     def replace_header(self):
-        """Replace header text in all sections."""
+        """Resolve the explicit header field placeholder."""
         new_header = self.payload.get("header_text", "")
         if not new_header:
             return
-        for section in self.doc.sections:
-            header = section.header
-            for para in header.paragraphs:
-                full = para.text
-                if full.strip():
-                    # Replace all text in runs
-                    for run in para.runs:
-                        run.text = ""
-                    if para.runs:
-                        para.runs[0].text = new_header
-                    break
+        self._apply_field_placeholders({"field.header_text": new_header})
 
     # ─── Section 2: Settlement ──────────────────────────────────────────
 
@@ -549,33 +525,6 @@ class TemplateRenderer:
         if len(rows) >= 4:
             cells = rows[3].findall(qn("w:tc"))
             set_cell_text(cells, 4, format_amount(settlement.get("total_amount")))
-
-    # ─── Section 3: Service Unit ────────────────────────────────────────
-
-    def replace_service_unit(self):
-        """Replace service unit name and date."""
-        unit = self.payload.get("service", {}).get("unit", "")
-        date_str = self.payload.get("service", {}).get("date", "")
-
-        # Find paragraph after settlement table containing "服务单位"
-        for i, info in self.anchors.items():
-            if info["type"] == "p" and "服务单位" in info["text"]:
-                p = self._get_paragraph_at(i)
-                _set_paragraph_text(p, f"服务单位：{unit}")
-                _set_paragraph_style_props(p, "宋体", 12, False, "right")
-                if date_str:
-                    new_p = OxmlElement("w:p")
-                    r = OxmlElement("w:r")
-                    t = OxmlElement("w:t")
-                    t.set(qn("xml:space"), "preserve")
-                    t.text = f"日期：{date_str}"
-                    r.append(t)
-                    new_p.append(r)
-                    parent = self.body
-                    parent.insert(list(parent).index(p) + 1, new_p)
-                    _set_paragraph_style_props(new_p, "宋体", 12, False, "right")
-                self._rebuild_anchors()
-                break
 
     # ─── Section 4: TOC ────────────────────────────────────────────────
 
@@ -665,39 +614,6 @@ class TemplateRenderer:
         _set_paragraph_style_props(new_p, "宋体", 12, False, "left")
         # Rebuild anchors because body structure changed
         self._rebuild_anchors()
-
-    # ─── Section 5: Text replacements ───────────────────────────────────
-
-    def _replace_all_text(self, old: str, new: str):
-        """Replace all occurrences of `old` with `new` across ALL text nodes.
-        
-        Handles paragraphs, table cells, headers, and footnotes."""
-        # 1. Body paragraphs and table cells
-        for child in self.body:
-            tag = child.tag.split("}")[1] if "}" in child.tag else child.tag
-            if tag == "sectPr":
-                break
-            if tag == "p":
-                self._safe_replace_in_paragraph(child, old, new)
-            elif tag == "tbl":
-                # Replace in all table cell paragraphs
-                for tc in child.iter(qn("w:tc")):
-                    for p in tc.findall(qn("w:p")):
-                        self._safe_replace_in_paragraph(p, old, new)
-        
-        # 2. Headers and footers in all sections
-        for section in self.doc.sections:
-            for container in [section.header, section.footer,
-                              section.first_page_header, section.first_page_footer]:
-                try:
-                    for p in container.paragraphs:
-                        self._safe_replace_in_paragraph(p._element, old, new)
-                except:
-                    pass
-
-    def _safe_replace_in_paragraph(self, p_element, old: str, new: str):
-        """Replace text in a paragraph, preserving drawings. Delegates to template_engine."""
-        _engine_safe_replace_in_paragraph(p_element, old, new)
 
     def _apply_field_placeholders(self, mapping: dict[str, str]) -> int:
         """Resolve ``{{field.path}}`` placeholders in body, headers, footers.
@@ -870,56 +786,25 @@ class TemplateRenderer:
         survey_period_display = self.meta.get("survey_period_display", survey_period)
         service_date = self.payload.get("service", {}).get("date", "")
         service_unit = self.payload.get("service", {}).get("unit", "")
+        attachments = self.payload.get("attachments", {})
+        attachment2_filename = (
+            f"01-1. 团队问卷调查明细-{product}-"
+            f"{attachments.get('attachment1_name', '')}({region})"
+        )
 
-        # Phase A: Resolve explicit {{field.*}} placeholders inserted by Task 5.
-        # This must run before the legacy literal-string replacements below so
-        # that any pre-rendered template area uses the canonical placeholder
-        # path, not a brittle substring search. Legacy literal occurrences in
-        # questionnaire titles, attachment, and narrative text continue to be
-        # handled by the substring passes that follow (see Task 9 cleanup).
         self._apply_field_placeholders({
             "field.meta.product": product,
             "field.meta.region": region,
             "field.meta.survey_period_display": survey_period_display,
             "field.meta.sample_size": str(sample_size) if sample_size else "",
+            "field.report_title": self.payload.get("report_title", ""),
+            "field.header_text": self.payload.get("header_text", ""),
             "field.service.unit": service_unit,
             "field.service.date": service_date,
+            "field.attachments.attachment1_name": attachments.get("attachment1_name", ""),
+            "field.attachments.attachment2_name": attachments.get("attachment2_name", ""),
+            "field.attachments.attachment2_filename": attachment2_filename,
         })
-
-        # Replace "厄贝沙坦氢氯噻嗪片" with product name
-        if product and product != "厄贝沙坦氢氯噻嗪片":
-            self._replace_all_text("厄贝沙坦氢氯噻嗪片", product)
-
-        # Replace "广东省" with region
-        if region and region != "广东省":
-            self._replace_all_text("广东省", region)
-
-        # Replace sample count
-        if sample_size:
-            import re
-            old_sample = re.search(r"\d+份", _get_paragraph_text(self.body[24])) if len(self.body) > 24 else None
-            if old_sample:
-                self._replace_all_text(old_sample.group(0), f"{sample_size}份")
-            # Also replace the standalone number in "1642份" patterns
-            self._replace_all_text("1642份", f"{sample_size}份")
-            self._replace_all_text("1642名", f"{sample_size}名")
-
-        # Replace "项目名称" with label 服务商
-        self._replace_all_text("项目名称", "服务商")
-
-        # Replace survey period
-        if survey_period_display:
-            for i, info in self.anchors.items():
-                if info["type"] == "p" and "调研时间" in info["text"]:
-                    p = self._get_paragraph_at(i)
-                    _overwrite_paragraph_text_preserve_run_style(p, f"调研时间：{survey_period_display}")
-                    continue
-                if info["type"] == "p" and "样本采集时间" in info["text"]:
-                    p = self._get_paragraph_at(i)
-                    _overwrite_paragraph_text_preserve_run_style(p, f"样本采集时间：{survey_period_display}")
-
-        if service_date:
-            self._replace_all_text("2025年12月11日", service_date)
 
     def replace_preface(self):
         """Render preface from the explicit block prototype."""
@@ -927,23 +812,6 @@ class TemplateRenderer:
         if not preface:
             return
         self._apply_block_placeholder("block.preface", preface)
-
-    def replace_report_title(self):
-        """Replace the report title paragraph."""
-        title = self.payload.get("report_title", "")
-        if not title:
-            return
-
-        # Find the title paragraph (after 前言, before 项目背景)
-        idx = self._find_anchor_index("用药体验与疗效反馈患者调查问卷分析报告")
-        if idx is None:
-            idx = self._find_anchor_index("调查问卷分析报告")
-        if idx is None:
-            return
-
-        p = self._get_paragraph_at(idx)
-        _set_paragraph_text(p, title)
-        _set_paragraph_style_props(p, "宋体", 22, True, "center")
 
     def replace_project_background(self):
         """Render project background from the explicit block prototype."""
@@ -976,23 +844,11 @@ class TemplateRenderer:
         self._apply_block_placeholder("block.questionnaire_note", paragraphs)
 
     def replace_result_analysis_intro(self):
-        """Replace the intro paragraph for 问卷结果分析."""
+        """Render the result-analysis intro from its explicit block anchor."""
         intro = self.payload.get("result_analysis", {}).get("intro", [])
         if not intro:
             return
-
-        idx = self._find_anchor_index("问卷结果分析")
-        if idx is None:
-            return
-        heading = self._get_paragraph_at(idx)
-        _set_paragraph_style_props(heading, "宋体", 16, True, "left")
-
-        # Intro is the paragraph right after (before the chart)
-        intro_idx = idx + 1
-        if intro_idx in self.anchors and self.anchors[intro_idx]["type"] == "p":
-            p = self._get_paragraph_at(intro_idx)
-            _set_paragraph_text(p, intro[0] if intro else "")
-            _set_paragraph_style_props(p, "宋体", 12, False)
+        self._apply_block_placeholder("block.result_analysis.intro", intro)
 
     def replace_analysis_sections(self):
         """Replace all 4.x analysis sections in-place.
@@ -1322,10 +1178,6 @@ class TemplateRenderer:
         """Replace 调研结果 summary sections."""
         summary = self.payload.get("summary", {})
 
-        self._normalize_summary_heading()
-        self._ensure_summary_headings()
-        self._rebuild_anchors()
-
         # 5.1 问卷重点问题分析
         key_issue_items = summary.get("key_issue_items", [])
         if key_issue_items:
@@ -1346,29 +1198,6 @@ class TemplateRenderer:
                 "block.summary.recommendations",
                 recommendations,
             )
-
-    def _ensure_summary_headings(self):
-        """Ensure 调研结果 / 5.1 / 5.2 / 5.3 headings exist before replacement."""
-        if self._find_exact_paragraph_index("调研结果") is not None and self._find_exact_paragraph_index("5.1问卷重点问题分析") is not None:
-            return
-
-        anchor_idx = self._find_exact_paragraph_index("5.2调研结果总结")
-        if anchor_idx is None:
-            return
-        ref_child = self._get_paragraph_at(anchor_idx)
-
-        for text in ["调研结果", "5.1问卷重点问题分析"]:
-            if self._find_exact_paragraph_index(text) is not None:
-                continue
-            new_p = OxmlElement("w:p")
-            r = OxmlElement("w:r")
-            t = OxmlElement("w:t")
-            t.set(qn("xml:space"), "preserve")
-            t.text = text
-            r.append(t)
-            new_p.append(r)
-            ref_child.addprevious(new_p)
-            _set_paragraph_style_props(new_p, "宋体", 16, True, "left")
 
     def _make_chart_png(self, chart: dict, output_path: Path, role: str = "overview") -> Optional[Path]:
         categories = [str(value) for value in chart.get("categories", []) if str(value)]
@@ -1530,20 +1359,20 @@ class TemplateRenderer:
                 overview_pngs.append(png)
 
         drawing_paragraphs = []
-        found_intro = False
-        for child in self.body:
-            if child.tag.split("}")[-1] == "sectPr":
-                break
-            if child.tag.split("}")[-1] != "p":
-                continue
-            text = _get_paragraph_text(child).strip()
-            if "数据可视化" in text:
-                found_intro = True
-                continue
-            if found_intro and re.match(r"^4\.\d+", text):
-                break
-            if found_intro and _paragraph_has_drawing(child):
-                drawing_paragraphs.append(child)
+        for token in ("{{media.overview_pie}}", "{{media.overview_bar}}"):
+            paragraph = next(
+                (
+                    child
+                    for child in self.body
+                    if child.tag.split("}")[-1] == "p"
+                    and token in _get_paragraph_text(child)
+                    and _paragraph_has_drawing(child)
+                ),
+                None,
+            )
+            if paragraph is None:
+                raise ValueError(f"Missing overview media placeholder: {token}")
+            drawing_paragraphs.append(paragraph)
 
         for idx, png in enumerate(overview_pngs):
             if idx < len(drawing_paragraphs):
@@ -1573,77 +1402,6 @@ class TemplateRenderer:
                 first_line_chars=200,
             )
 
-    def _replace_section_body_by_heading(
-        self,
-        start_heading: str,
-        end_heading: str,
-        new_paragraphs: list[str],
-        end_heading_prefix: bool = False,
-        fail_if_missing: bool = False,
-    ):
-        """Replace paragraph content between two exact heading paragraphs."""
-        start_idx = self._find_exact_paragraph_index(start_heading)
-        if end_heading_prefix:
-            end_idx = self._find_paragraph_prefix_index(end_heading, start=(start_idx + 1) if start_idx is not None else 0)
-        else:
-            end_idx = self._find_exact_paragraph_index(end_heading, start=(start_idx + 1) if start_idx is not None else 0)
-        if start_idx is None or end_idx is None or end_idx <= start_idx:
-            if fail_if_missing:
-                raise ValueError(f"Cannot replace section body from '{start_heading}' to '{end_heading}'.")
-            return
-
-        body_paragraphs = []
-        for i in range(start_idx + 1, end_idx):
-            info = self.anchors.get(i)
-            if not info or info["type"] != "p":
-                continue
-            body_paragraphs.append(info["elem"])
-
-        insert_before = self._get_paragraph_at(end_idx)
-        for pi, text in enumerate(new_paragraphs):
-            if pi < len(body_paragraphs):
-                _set_paragraph_text(body_paragraphs[pi], text)
-                _set_paragraph_style_props(body_paragraphs[pi], "宋体", 12, False)
-            else:
-                new_p = OxmlElement("w:p")
-                new_r = OxmlElement("w:r")
-                new_t = OxmlElement("w:t")
-                new_t.set(qn("xml:space"), "preserve")
-                new_t.text = text
-                new_r.append(new_t)
-                new_p.append(new_r)
-                insert_before.addprevious(new_p)
-                _set_paragraph_style_props(new_p, "宋体", 12, False)
-
-        for extra in body_paragraphs[len(new_paragraphs):]:
-            extra.getparent().remove(extra)
-
-        self._rebuild_anchors()
-
-    def _replace_paragraphs_after(self, start_idx: int, new_paragraphs: list[str], stop_patterns: list[str] = None):
-        """Replace paragraphs after a heading with new text."""
-        stop_patterns = stop_patterns or []
-        target_paragraphs = []
-
-        for i in range(start_idx + 1, start_idx + 40):
-            if i not in self.anchors:
-                break
-            info = self.anchors[i]
-            if info["type"] != "p":
-                continue
-            text = info["text"]
-            if any(sp in text for sp in stop_patterns):
-                break
-            if text.strip():
-                target_paragraphs.append(info["elem"])
-
-        for pi, paragraph in enumerate(target_paragraphs):
-            if pi < len(new_paragraphs):
-                _set_paragraph_text(paragraph, new_paragraphs[pi])
-                _set_paragraph_style_props(paragraph, "宋体", 12, False)
-            else:
-                paragraph.getparent().remove(paragraph)
-
     def replace_attachments(self):
         """Render attachment 1 from its bookmarked question prototype."""
         attachments = self.payload.get("attachments", {})
@@ -1651,14 +1409,16 @@ class TemplateRenderer:
         if not questions:
             return
 
-        att_name = attachments.get("attachment1_name", "")
-        if att_name:
-            idx = self._find_anchor_index("附件1")
-            if idx is None:
-                raise ValueError("Missing attachment 1 heading")
-            p = self._get_paragraph_at(idx)
-            _set_paragraph_text(p, f"附件1：{att_name}")
-            _set_paragraph_style_props(p, "宋体", 22, True, "left")
+        heading_text = f"附件1：{attachments.get('attachment1_name', '')}"
+        heading_idx = self._find_exact_paragraph_index(heading_text)
+        if heading_idx is not None:
+            _set_paragraph_style_props(
+                self._get_paragraph_at(heading_idx),
+                "宋体",
+                22,
+                True,
+                "left",
+            )
 
         start_idx, end_idx = _bookmark_body_range(
             self.body,
@@ -1771,18 +1531,6 @@ class TemplateRenderer:
                     first_line_chars=0,
                 )
 
-    def restyle_key_issue_titles(self):
-        """Force 5.1 custom sub-headings back to title layout after body formatting."""
-        for item in self.payload.get("summary", {}).get("key_issue_items", []):
-            heading_text = item.get("heading")
-            if not heading_text:
-                continue
-            idx = self._find_exact_paragraph_index(heading_text)
-            if idx is None:
-                continue
-            paragraph = self._get_paragraph_at(idx)
-            _set_paragraph_style_props(paragraph, "宋体", 12, True, "left", body_layout=False)
-
     # ─── Paragraph formatting ───────────────────────────────────────────
     
     def _apply_uniform_paragraph_formatting(self):
@@ -1871,86 +1619,21 @@ class TemplateRenderer:
             rFonts.set(qn("w:hAnsi"), "宋体")
             rFonts.set(qn("w:eastAsia"), "宋体")
 
-    def _apply_red_font_replacements(self):
-        """Apply red-font variable replacements across ALL text in the document.
-        
-        This is a final cleanup pass that ensures any hardcoded template text
-        (product names, regions, sample sizes) is replaced even in paragraphs
-        generated by AI that still contain old template values.
-        """
-        rf = self.payload.get("red_font_replacements", {})
-        if not rf:
-            return
-        
-        # Build replacement map: old_text -> new_text
-        # Keys are the template's original values, values are the new ones
-        replacements = {}
-        product = rf.get("drug_name", "")
-        region = rf.get("region", "")
-        sample_size = rf.get("sample_size", "")
-        
-        service_unit = self.payload.get("service", {}).get("unit", "")
-        if product:
-            replacements["厄贝沙坦氢氯噻嗪片"] = product
-        if region:
-            replacements["广东省"] = region
-        if sample_size:
-            replacements["1642份"] = f"{sample_size}份"
-            replacements["1642名"] = f"{sample_size}名"
-            replacements["1642"] = sample_size  # standalone number
-        replacements["项目名称"] = "服务商"
-        
-        if not replacements:
-            return
-        
-        # Apply to all paragraphs in body
-        for child in self.body:
-            tag = child.tag.split("}")[1] if "}" in child.tag else child.tag
-            if tag == "sectPr":
-                break
-            if tag == "p":
-                self._safe_replace_multi(child, replacements)
-            elif tag == "tbl":
-                for tc in child.iter(qn("w:tc")):
-                    for p in tc.findall(qn("w:p")):
-                        self._safe_replace_multi(p, replacements)
-        
-        # Apply to headers and footers
-        for section in self.doc.sections:
-            for container in [section.header, section.footer,
-                              section.first_page_header, section.first_page_footer]:
-                try:
-                    for p in container.paragraphs:
-                        self._safe_replace_multi(p._element, replacements)
-                except:
-                    pass
-    
-    def _safe_replace_multi(self, p_element, replacements: dict):
-        """Replace multiple strings in a paragraph, preserving drawings."""
-        has_drawing = any(
-            r.find(qn("w:drawing")) is not None
-            for r in p_element.findall(qn("w:r"))
-        )
-        
-        if has_drawing:
-            # Only replace in non-drawing runs
-            for r in p_element.findall(qn("w:r")):
-                if r.find(qn("w:drawing")) is not None:
-                    continue
-                for t in r.findall(qn("w:t")):
-                    if t.text:
-                        for old, new in replacements.items():
-                            if old in t.text:
-                                t.text = t.text.replace(old, new)
-                                t.set(qn("xml:space"), "preserve")
-        else:
-            # Full paragraph replacement
-            full = _get_paragraph_text(p_element)
-            new_full = full
-            for old, new in replacements.items():
-                new_full = new_full.replace(old, new)
-            if new_full != full:
-                _set_paragraph_text(p_element, new_full)
+    def _normalize_font_names_in_package(self, docx_path: Path) -> None:
+        """Normalize legacy font declarations in all OOXML style containers."""
+        tmp_path = docx_path.with_suffix(".fonts.tmp.docx")
+        with zipfile.ZipFile(docx_path, "r") as source:
+            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as target:
+                for item in source.infolist():
+                    data = source.read(item.filename)
+                    if item.filename.endswith(".xml"):
+                        data = data.replace(
+                            "汉仪中宋简".encode("utf-8"),
+                            "宋体".encode("utf-8"),
+                        )
+                    target.writestr(item, data)
+        docx_path.unlink()
+        tmp_path.rename(docx_path)
 
     # ─── Chart update via ZIP manipulation ─────────────────────────────
 
@@ -2247,12 +1930,10 @@ class TemplateRenderer:
         # Phase 1: Simple text replacements (in order of template structure)
         self.replace_header()
         self.replace_settlement()
-        self.replace_service_unit()
         self.replace_toc()           # structural: rebuilds anchors inside
         self.replace_metadata()
         self.replace_preface()       # structural: inserts paragraphs
         self._rebuild_anchors()
-        self.replace_report_title()
         self.replace_project_background()
         self._rebuild_anchors()
         self.replace_project_execution()
@@ -2268,75 +1949,24 @@ class TemplateRenderer:
         self.replace_attachments()
         
         # Phase 1.4: Uniform paragraph formatting (all body text: 两端对齐,
-        # 首行缩进2字符, 2.5倍行距 — before red-font pass so formatted text
-        # still gets variable replacement)
+        # 首行缩进2字符, 2.5倍行距).
         self._apply_uniform_paragraph_formatting()
-        
-        # Phase 1.5: Global red-font replacement (catches any AI-generated text
-        # that still contains old template values like "广东省" or "1642份")
-        self._apply_red_font_replacements()
 
-        # Phase 1.6: Re-apply local layouts that must override the generic
+        # Phase 1.5: Re-apply local layouts that must override the generic
         # body-format pass.
-        self._rebuild_anchors()
-        self.restyle_key_issue_titles()
         self._rebuild_anchors()
         self.replace_disclaimer()
         self._apply_global_font_name()
 
         # Save
         self.doc.save(str(output_path))
+        self._normalize_font_names_in_package(output_path)
 
-        # Phase 2: Global XML-level text cleanup (catch anything missed)
-        self._global_replace_in_xml(output_path)
-
-        # Phase 3: Insert 5.1 native charts, then enable field updates on open.
+        # Phase 2: Insert 5.1 native charts, then enable field updates on open.
         self._insert_key_issue_native_charts(output_path)
         self._enable_update_fields_on_open(output_path)
 
         return output_path
-
-    def _global_replace_in_xml(self, docx_path: Path):
-        """Do a raw XML-level text replacement as a final cleanup pass.
-        
-        This catches text in containers not reached by python-docx traversal
-        (e.g., SDTs, content controls, embedded text boxes).
-        """
-        region = self.meta.get("region", "")
-        product = self.meta.get("product", "")
-        survey_period = self.meta.get("survey_period", "")
-        survey_period_display = self.meta.get("survey_period_display", survey_period)
-        if not region and not product and not survey_period_display:
-            return
-        
-        # Map old → new from the template's original data
-        replacements = {}
-        replacements["汉仪中宋简"] = "宋体"
-        if region:
-            replacements["广东省"] = region
-        if product and product != "厄贝沙坦氢氯噻嗪片":
-            replacements["厄贝沙坦氢氯噻嗪片"] = product
-        sample_size = self.meta.get("sample_size") or self.meta.get("valid_count")
-        if sample_size:
-            replacements["1642"] = str(sample_size)
-        
-        tmp_path = docx_path.with_suffix(".tmp.docx")
-        with zipfile.ZipFile(docx_path, "r") as zin:
-            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
-                for item in zin.infolist():
-                    data = zin.read(item.filename)
-                    if item.filename.endswith(".xml") or item.filename.endswith(".rels"):
-                        text = data.decode("utf-8", errors="replace")
-                        for old, new in replacements.items():
-                            text = text.replace(old, new)
-                        if survey_period_display and item.filename == "word/document.xml":
-                            text = re.sub(r"调研时间：[^<]+", f"调研时间：{survey_period_display}", text)
-                            text = re.sub(r"样本采集时间：[^<]+", f"样本采集时间：{survey_period_display}", text)
-                        data = text.encode("utf-8")
-                    zout.writestr(item, data)
-        
-        docx_path.unlink()
-        tmp_path.rename(docx_path)
 
 
 # ─── CLI ─────────────────────────────────────────────────────────────────────

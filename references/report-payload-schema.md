@@ -17,7 +17,7 @@
       {
         "chart_ref": "chart_4_overview_pie",
         "chart_type": "pie",
-        "render_mode": "office",
+        "render_mode": "image",
         "title": "问卷结果分析维度占比饼状图",
         "categories": ["药品疗效", "药品安全性", "用药行为与习惯", "用药便利性", "药品经济性", "药品可及性", "用药指导信息评价"],
         "values": [1, 2, 5, 2, 1, 1, 2]

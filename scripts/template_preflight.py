@@ -24,6 +24,7 @@ Stable error codes (mirrors the spec)::
     INVALID_CHART_MODE        - payload chart render_mode not in allowlist
     MISSING_BLOCK_BOUNDARY    - repeat bookmark start/end is absent
     INVALID_BLOCK_BOUNDARY    - repeat bookmark is duplicated/reversed/crossed
+    MISSING_CHART_PART        - required OOXML chart/relationship part absent
 """
 from __future__ import annotations
 
@@ -67,10 +68,11 @@ SCANNED_PARTS = (
 class TemplatePreflightError(RuntimeError):
     """Raised in ``mode='fail'`` when preflight finds at least one error."""
 
-    def __init__(self, errors: list[dict]) -> None:
+    def __init__(self, errors: list[dict], result: dict | None = None) -> None:
         first = errors[0] if errors else {"code": "UNKNOWN", "message": "preflight failed"}
         super().__init__(f"[{first['code']}] {first['message']} (+{len(errors) - 1} more)")
         self.errors = errors
+        self.result = result or {"status": "error", "mode": "fail", "errors": errors}
 
 
 @dataclass
@@ -154,6 +156,13 @@ def _scan_invalid_placeholders(template_path: Path) -> list[str]:
 def _check_payload_paths(
     contract: TemplateContract, payload: dict, issues: list[_Issue]
 ) -> None:
+    expected_types = {
+        "list": list,
+        "object": dict,
+        "string": str,
+        "number": (int, float),
+        "boolean": bool,
+    }
     for path in contract.required_payload_paths:
         found, value = _payload_get(payload, path)
         if not found:
@@ -173,6 +182,21 @@ def _check_payload_paths(
                     location=path,
                 )
             )
+            continue
+        declared_type = contract.payload_path_types.get(path)
+        if declared_type:
+            python_type = expected_types.get(declared_type)
+            if python_type is None or not isinstance(value, python_type):
+                issues.append(
+                    _Issue(
+                        code="INVALID_PAYLOAD_TYPE",
+                        message=(
+                            f"required payload path has type {type(value).__name__}; "
+                            f"expected {declared_type}: {path}"
+                        ),
+                        location=path,
+                    )
+                )
 
 
 def _check_singletons(
@@ -229,7 +253,9 @@ def _check_invalid_placeholders(
 
 def _iter_render_modes(payload: dict, payload_key: str) -> Iterable[str]:
     """Yield ``render_mode`` strings for a payload list at ``payload_key``."""
-    items = payload.get(payload_key)
+    found, items = _payload_get(payload, payload_key)
+    if not found:
+        return
     if not isinstance(items, list):
         return
     for entry in items:
@@ -255,6 +281,47 @@ def _check_chart_modes(
                         location=payload_key,
                     )
                 )
+
+
+def _check_template_type(
+    contract: TemplateContract,
+    payload: dict,
+    issues: list[_Issue],
+) -> None:
+    if not contract.payload_template_types:
+        return
+    found, template_type = _payload_get(payload, "meta.template_type")
+    if not found or template_type not in contract.payload_template_types:
+        issues.append(
+            _Issue(
+                code="TEMPLATE_TYPE_MISMATCH",
+                message=(
+                    f"payload meta.template_type={template_type!r} not in "
+                    f"{list(contract.payload_template_types)}"
+                ),
+                location="meta.template_type",
+            )
+        )
+
+
+def _check_required_parts(
+    contract: TemplateContract,
+    template_path: Path,
+    issues: list[_Issue],
+) -> None:
+    if not contract.required_parts:
+        return
+    with zipfile.ZipFile(template_path) as zipped:
+        names = set(zipped.namelist())
+    for part in contract.required_parts:
+        if part not in names:
+            issues.append(
+                _Issue(
+                    code="MISSING_CHART_PART",
+                    message=f"required OOXML part absent: {part}",
+                    location=part,
+                )
+            )
 
 
 def _check_repeat_bookmarks(
@@ -359,10 +426,12 @@ def preflight_template(
     template_path = contract.template_path
 
     _check_payload_paths(contract, payload, issues)
+    _check_template_type(contract, payload, issues)
     _check_singletons(contract, template_path, issues)
     _check_invalid_placeholders(template_path, issues)
     _check_chart_modes(contract, payload, issues)
     _check_repeat_bookmarks(contract, template_path, issues)
+    _check_required_parts(contract, template_path, issues)
 
     occurrences = scan_template_placeholders(template_path)
     metrics = {
@@ -385,5 +454,5 @@ def preflight_template(
     }
 
     if mode == "fail" and errors:
-        raise TemplatePreflightError(errors)
+        raise TemplatePreflightError(errors, result)
     return result

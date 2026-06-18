@@ -75,6 +75,9 @@ class TemplateContract:
     field_placeholders: tuple[str, ...] = ()
     # Mapping from repeat placeholder token to its Word bookmark name.
     repeat_bookmarks: dict[str, str] = field(default_factory=dict)
+    payload_template_types: tuple[str, ...] = ()
+    payload_path_types: dict[str, str] = field(default_factory=dict)
+    required_parts: tuple[str, ...] = ()
     allowed_chart_modes: dict[str, tuple[str, ...]] = field(default_factory=dict)
     manifest_path: Path = field(default_factory=lambda: Path("."))
 
@@ -257,6 +260,15 @@ def load_manifest(manifest_path: Path) -> TemplateContract:
     repeat_bookmarks = _ensure_str_mapping(
         raw.get("repeat_bookmarks"), "repeat_bookmarks", manifest_path
     )
+    payload_template_types = _ensure_str_list(
+        raw.get("payload_template_types"), "payload_template_types", manifest_path
+    )
+    payload_path_types = _ensure_str_mapping(
+        raw.get("payload_path_types"), "payload_path_types", manifest_path
+    )
+    required_parts = _ensure_str_list(
+        raw.get("required_parts"), "required_parts", manifest_path
+    )
 
     overlap = set(required_singletons) & set(optional_singletons)
     if overlap:
@@ -281,6 +293,9 @@ def load_manifest(manifest_path: Path) -> TemplateContract:
         optional_singletons=optional_singletons,
         field_placeholders=field_placeholders,
         repeat_bookmarks=repeat_bookmarks,
+        payload_template_types=payload_template_types,
+        payload_path_types=payload_path_types,
+        required_parts=required_parts,
         allowed_chart_modes=allowed_chart_modes,
         manifest_path=manifest_path.resolve(),
     )
