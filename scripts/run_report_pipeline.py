@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime
@@ -32,13 +35,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 # Ordered phase names recorded in run_manifest.json/timings.json. Keep stable so
-# downstream perf comparisons can read them by key.
+# downstream perf comparisons can read them by key.  ai_content_generation and
+# local_retry are optional phases recorded only when parallel/retry is used by
+# external orchestration.
 PHASE_NAMES = (
     "parse_questionnaire",
     "preflight_content",
+    "ai_content_generation",
     "build_payload",
     "template_preflight",
     "render_docx",
+    "local_retry",
     "final_validate_docx",
     "total",
 )
@@ -120,6 +127,64 @@ def file_info(path: Path) -> dict:
         "mtime": stat.st_mtime,
         "sha1": file_sha1(resolved),
     }
+
+
+def ensure_tasks_dir(run_dir: Path) -> Path:
+    """Create and return the tasks/ subdirectory under a run directory.
+
+    Each task result is stored as tasks/<task_id>.json by the external
+    orchestration layer.  This helper is exposed so callers can create the
+    directory once at run start.
+    """
+    tasks_dir = run_dir / "tasks"
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    return tasks_dir
+
+
+def save_task_unit(run_dir: Path, task_id: str, unit_ref: str, paragraph: str) -> Path:
+    """Persist a single generation unit (e.g. q01, 5.1-1) to tasks/<task_id>.json.
+
+    The file is a dict keyed by unit_ref.  Each save merges into the existing
+    file so that multiple units belonging to the same task_id accumulate.
+    Returns the path to the task JSON file.
+    """
+    tasks_dir = ensure_tasks_dir(run_dir)
+    path = tasks_dir / f"{task_id}.json"
+    lock_path = tasks_dir / f".{task_id}.lock"
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            if path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
+            else:
+                data = {"task_id": task_id, "results": {}}
+            data["results"][unit_ref] = paragraph
+
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=tasks_dir,
+                prefix=f".{task_id}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temp_file:
+                temp_path = Path(temp_file.name)
+                json.dump(data, temp_file, ensure_ascii=False, indent=2)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+            os.replace(temp_path, path)
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    return path
+
+
+def load_task_results(run_dir: Path, task_id: str) -> dict[str, str]:
+    """Load persisted results for a task_id.  Returns {unit_ref: paragraph}."""
+    path = run_dir / "tasks" / f"{task_id}.json"
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data.get("results", {})
 
 
 def finalize_with_validation(output_docx: Path, payload: dict, run_dir: Path) -> None:

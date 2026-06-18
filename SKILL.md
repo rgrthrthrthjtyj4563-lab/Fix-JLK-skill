@@ -5,6 +5,13 @@ description: "Use when generating patient questionnaire analysis reports for pha
 
 # JLK Patient Report Skill
 
+## Template Rendering Refactor
+
+对内置 Word 模板、占位符、模板 manifest、动态块渲染或渲染性能进行修改前，必须先完整阅读
+`references/template-placeholder-rendering-spec.md`。该文档定义本仓库模板改造的目标架构、非目标、
+占位符协议、迁移顺序、测试要求和最终审核门禁。不得把本改造扩展为独立模板管理系统。
+如需把改造任务交给另一个 AI，使用 `references/template-refactor-agent-prompt.md` 中的完整执行提示词。
+
 ## When To Use
 - 输入是患者问卷数据或问卷统计表。
 - 输出必须是 `Word 报告`。
@@ -67,7 +74,7 @@ description: "Use when generating patient questionnaire analysis reports for pha
    - `问卷结果分析` 导语中的维度名称和维度数量必须与 `4.x` 实际章节完全一致。
    - `用药体验与疗效反馈` 模板的 `问卷结果分析` 固定包含 `2` 张概览图：`维度占比饼状图` 与 `维度横向柱形图`。
    - 两张概览图的统计口径统一为各 `4.x` 维度归入的题目数量，维度顺序必须与 `4.1-4.7` 顺序一致。
-   - 第一张概览图必须保持原生 Office 饼图；第二张概览图必须改为 PNG 图片形式的“横向柱状图 + 维度题目数量”输出，不能退化为饼图、占比图或依赖 `chart2.xml + Workbook2.xlsx` 的重算结果。
+   - 第 `4` 部分的两张概览图均输出为 PNG 图片：第一张为“维度占比饼状图（含图例）”，第二张为“维度横向柱形图 + 维度题目数量”。两张均不依赖 `chart1.xml`/`chart2.xml` 或 `Workbook1.xlsx`/`Workbook2.xlsx` 的原生重算结果。`final_validate_docx._validate_png_chart_layout` 强制要求两张都是 PNG drawing。
    - `5.1 问卷重点问题分析` 必须保留 `2` 张原生 `3D` 饼图，并与第 `4` 部分的两张概览图并存，不能因为修第 `4` 部分图表而删除 `5.1` 双图。
    - `问卷调研服务结算` 必须按样本量实际计算：样本费用 = 样本数 × 100，报告费用 = 30000，总计 = 样本费用 + 报告费用。
 5. `5.1 问卷重点问题分析` 必须由 AI 在 front matter 中通过 `key_issue_question_refs` 精确声明选题：
@@ -78,7 +85,7 @@ description: "Use when generating patient questionnaire analysis reports for pha
 6. 用 `scripts/render_from_template.py` 基于模板底稿做**对象级替换**输出最终 `docx`。
      - 这是主渲染器，在模板文档中定位锚点并替换内容，不清空正文。
      - 保留模板所有样式：section 断点、页眉、表格、图表、字体。
-     - `scripts/render_report.py` 是旧版「清空重写」方案，已弃用。
+     - 旧版「清空重写」的 `scripts/render_report.py` 已删除，生产路径只保留模板驱动渲染器。
      - `04_outputs/` 中若存在旧版 `report_content.md / report_final.md / render_report.py` 等文件，只能视为历史脏产物，不能作为当前结构参考。
      - `附件1` 必须按题目块整体重建：题干使用 `（1）（2）...` 顺序号，去掉原题号前缀如 `1.` `6.` `11.`，选项仍保留 `A./B./C./D.` 且必须按原始问卷顺序逐题展开。
 7. 运行时优先使用 `scripts/run_report_pipeline.py`，它会为每次生成创建独立运行目录，避免复用固定的 `tmp/docs/content.md` 或 `generated.docx`。
@@ -87,11 +94,228 @@ description: "Use when generating patient questionnaire analysis reports for pha
 10. `scripts/build_payload.py` 会对 `前言`、`项目背景` 和 `问卷结果分析` 单题正文执行硬校验；段数、字数、区域信息、结构、数字百分比呈现或旧式机械分析不达标时，pipeline 必须直接失败，不得静默降级。
 11. 如果模板底稿缺少第 `4` 部分的第二张概览图位，或维度配置数量与实际 `4.x` 章节不一致，pipeline 必须直接失败。
 
+## Markdown Format Contract
+
+`report_content.md` 必须使用以下结构。这是唯一被支持的标题层级，严禁自行调整；
+所有结构性试错都会被 preflight 一次性拒绝，AI 不应在此环节反复重试不同写法。
+
+### 标题层级硬契约
+
+| 章节 | 必需层级 | 禁止层级 | 备注 |
+|------|----------|----------|------|
+| 顶层报告章节（前言/项目背景/项目开展情况/问卷说明/问卷结果分析/调研结果） | `##` | `#` 一级标题、`###` 及以下 | 一级标题会被 preflight 直接拒绝 |
+| `4.x` 维度章节（如 `4.1 用药基础信息`） | `###` | `##`（兼容但非规范）、`####` | 必须形如 `### 4.1 维度名称`，编号与维度名之间保留空格 |
+| 单题小标题（如 `用药原因分析`） | `####` | `### 4.1.1 ...`（会被识别为新 `4.x` 章节） | 每道题对应一个 `####` 小标题 |
+| `5.x` 子章节（5.1/5.2/5.3） | `###` | `##`、`####` | 三级标题之后直接跟正文段落 |
+
+- `#` 一级标题不会被解析；preflight 会输出 `use ## for a top-level report section` 提示。
+- `### 4.1.1 ...` 这种三级带子编号的写法会被解析器识别为新的 `4.x` 章节，与维度骨架冲突；
+  preflight 会明确提示 `use #### for a subtopic`。
+- Markdown 正文不需要写字段名。解析后的每个子主题正文存入内部字段 `paragraphs`；不要构造或依赖名为 `analysis` 的字段。
+- 标题标记后必须有空格，例如 `#### 用药行为分析`，不要写成 `####用药行为分析`。
+
+### 可直接复制的完整骨架
+
+下面这份骨架可作为 `report_content.md` 的起点。括号注释只是说明，正式草稿应直接替换为正文文本：
+
+```markdown
+---
+product: （品种名）
+region: （地区名）
+survey_period: （如 2025年03月01日——2025年03月31日）
+theme: （固定维度表中的 theme_name，可留空）
+valid_count: （有效问卷数）
+key_issue_question_refs: '["q02", "q05"]'
+---
+
+## 前言
+
+（第 1 段：疾病/品类背景 → 产品价值 → 区域与对象 → 调研目的，约 200 字）
+
+（第 2 段：分析层面说明 → 应用价值，约 200 字）
+
+## 项目背景
+
+（第 1 段：宏观背景/区域特征）
+
+（第 2 段：现有数据缺口/调研必要性）
+
+## 项目开展情况
+
+（程序生成，AI 可选覆盖）
+
+## 问卷说明
+
+（程序生成，AI 可选覆盖）
+
+## 问卷结果分析
+
+（导语段，程序自动拼接维度名称与数量）
+
+### 4.1 维度名称
+
+#### 小标题
+
+（该题唯一一段 250-300 字分析正文，必须包含数字百分比、判断词、收束词；
+禁止 A/B/C/D 字母选项列举或建议性措辞）
+
+#### 小标题
+
+（同上格式）
+
+### 4.2 维度名称
+
+#### 小标题
+
+（同上格式）
+
+## 调研结果
+
+### 5.1 问卷重点问题分析
+
+（第 1 段，250-350 字，对应 key_issue_question_refs[0]）
+
+（第 2 段，250-350 字，对应 key_issue_question_refs[1]）
+
+### 5.2 调研结果总结
+
+（3-5 段，总字数 ≤ 700，必须点名品种或地区，包含分析判断词）
+
+### 5.3 建议
+
+（导语 1 段，40-120 字，以「基于/结合调研结果」开头并点名品种）
+
+1. （建议条目，80-180 字，包含目标词与具体载体关键词）
+
+2. （同上格式）
+```
+
+### 4.x 单题正文硬校验
+
+任意一项不满足都会在 preflight 阶段直接失败：
+
+- 正文必须恰好 `1` 段，长度必须为 `250-300` 个字符。
+- 必须包含数字百分比，如 `39.13%`。
+- 必须包含至少一个分析判断词：`说明`、`表明`、`反映`、`提示`。
+- 必须包含至少一个收束词：`整体看`、`整体来看`、`后续`、`需`、`仍`。
+- 禁止出现：`A.`、`B.`、`C.`、`D.`、`选项A`、`选项B`、`选项C`、`选项D`、`逐项分布`、`从共性特征看`、`建议`。
+
+### 5.x 正文硬校验
+
+- `5.1`：必须恰好 `2` 段，每段 `250-350` 字；每段必须包含 `说明/表明/反映/提示/判断` 之一。
+- `5.2`：必须 `3-5` 段，总字数不超过 `700` 字；必须点名品种或地区，并包含分析判断词。
+- `5.3`：必须包含导语和 `2-4` 条以 `1. ` 格式编号的建议，总字数 `300-600` 字，每条 `80-180` 字。
+- `5.3` 每条建议必须包含至少一个目标词：`针对`、`围绕`、`聚焦`、`面向`、`建议`。
+- `5.3` 每条建议必须包含至少一个载体关键词：`提醒卡`、`药盒`、`二维码`、`随访表`、`患者手册`、`记录表`、`短视频`、`沟通群`、`宣传册`、`流程单`、`闹钟`、`药师`、`门诊`、`药店`、`台账`、`贴`。
+
+### Preflight 错误消息格式
+
+所有内容质量错误都集中在 `preflight_report_content()` 中产生，错误消息统一携带：
+
+```text
+章节 / 题号 / 小标题：实际值；期望值；修改方法
+```
+
+示例：
+
+```text
+4.1 / q01 / 血压控制效果分析：正文 238 字，要求 250-300 字，还需补充至少 12 字。
+```
+
+```text
+发现 ### 4.1.1 血压控制效果分析。
+该标题会被识别为新的 4.x 章节，请改为 #### 血压控制效果分析。
+```
+
+`build_payload` 阶段不再重复抛出可在 preflight 捕获的内容质量错误，避免 AI 反复试错。
+
 ## Preflight Check（草稿预检查）
 - `run_report_pipeline.py` 在 `build_payload` 之前执行 `preflight_report_content()`，验证草稿完整性。
-- 检查项：survey_period 存在性、key_issue_question_refs 格式与数量、theme 维度表命中、前言/项目背景/4.x 分析正文/5.1/5.2/5.3 章节存在性。
+- 检查项：survey_period 存在性、key_issue_question_refs 格式与数量、theme 维度表命中、标题与章节结构、前言/项目背景/4.x 分析正文，以及 5.1/5.2/5.3 的完整质量规则。
 - Preflight 失败时：输出 `PREFLIGHT_FAILED` 及具体错误列表，保存 `preflight.json`，退出码非零，不进入 Word 渲染。
 - AI 可以基于 preflight 错误修改草稿后重新运行，无需重写整份报告。
+- Preflight 是唯一的内容质量入口；`build_payload` 与 `validate_payload` 不再产生新的内容质量错误，仅作结构化兜底，确保任何在 preflight 之外暴露的同类错误都被视为契约缺陷。
+
+## Parallel Generation Contract（并行生成契约）
+
+并行执行机制由调用方（外部 Skill / 子代理调度器）实现；本仓库的 Python pipeline 仅支持顺序模式。
+此处只定义任务切分、输入输出结构与合并规则，便于上层调度按统一契约编排：
+
+### 任务切分
+
+固定七组任务，按需启用：
+
+| task_id | 内容 |
+|---------|------|
+| `preface-background` | 前言 + 项目背景 |
+| `chapter4-batch-1` … `chapter4-batch-4` | 4.x 单题分析；按题量平均切成最多 4 批 |
+| `summary-key-issue` | 5.1 重点问题分析（2 段，对应 `key_issue_question_refs`） |
+| `summary-overall-and-recs` | 5.2 总结 + 5.3 建议 |
+
+执行策略：
+
+- 调度器若支持子代理可启用 4 路并发；并发失败时自动降为 2 路；不支持时顺序执行。
+- 任意子任务只接收其归属题目、统计结果与写作规则，不得感知其他任务草稿。
+- 子任务**禁止**修改章节编号、维度名、标题、题目归属与图表位置；这些骨架由程序生成。
+- 主任务只负责按骨架顺序合并，不重新改写已通过的内容。
+- 禁止让并行任务直接编辑同一份 `report_content.md`，必须返回结构化结果由主任务合并。
+
+### 任务输入输出 JSON 契约
+
+输入：
+
+```json
+{
+  "task_id": "chapter4-batch-1",
+  "items": [
+    {
+      "question_ref": "q01",
+      "section_number": "4.1",
+      "subtitle": "血压控制效果分析",
+      "question": "题目文本",
+      "statistics": []
+    }
+  ],
+  "constraints": {
+    "min_chars": 250,
+    "max_chars": 300
+  }
+}
+```
+
+输出：
+
+```json
+{
+  "task_id": "chapter4-batch-1",
+  "results": [
+    {
+      "question_ref": "q01",
+      "paragraph": "分析正文"
+    }
+  ]
+}
+```
+
+### 局部校验与局部重试
+
+生成结果以题号或段落 id 为最小单元保存到 `tmp/runs/<run_id>/tasks/<task_id>.json`：
+
+```text
+q01 → 分析正文
+q02 → 分析正文
+5.1-1 → 重点问题第一段
+5.3-2 → 第二条建议
+```
+
+校验失败时：
+
+- 只重试失败题目或段落。
+- 重试提示中给出当前字数、缺失规则与原始正文。
+- 每个单元最多重试两次。
+- 两次仍失败则停止并输出明确诊断，不重新生成整份报告。
+
+并行结果乱序返回时，主任务必须按问卷顺序与 `key_issue_question_refs` 顺序重新排序后合并。
 
 ## No-Fallback Policy（禁止程序兜底）
 - `4.x` 每道题分析正文：AI 缺失/不合格时直接 `raise ValueError`，不使用 `default_subtopic_paragraph()` 兜底。错误信息格式：`4.2 / q07 / 包装设计满意度分析 缺少 AI 分析正文`。
@@ -136,7 +360,7 @@ description: "Use when generating patient questionnaire analysis reports for pha
 - Each question follows the fixed pattern: `Subtitle -> Statistics Table -> Analysis Paragraph`. One subtopic contains exactly one question; multi-question stacking under one subtitle is prohibited.
 
 ## Customer Feedback Validation Rules
-- **日期格式**：`调研时间`、`样本采集时间` 等显示字段使用紧凑格式（如 `2025年10月01日-10月31日`），不使用原始 `——` 格式。`_global_replace_in_xml` 必须对两个字段同时替换。
+- **日期格式**：`调研时间`、`样本采集时间` 等显示字段使用紧凑格式（如 `2025年10月01日-10月31日`），不使用原始 `——` 格式；两处均由显式 field/block 占位符写入。
 - **服务商**：模板占位符 `项目名称` 必须替换为标签 `服务商`，最终文档不得残留 `项目名称` 占位符。
 - **服务商一致性**：`service.unit` 和 `disclaimer.unit` 必须完全一致，否则 pipeline 失败。
 - **柱形图无图例**：横向柱形图（`chart_4_overview_bar`）不添加 `label` 参数和 `ax.legend()`，仅显示数值标注。
@@ -154,10 +378,10 @@ description: "Use when generating patient questionnaire analysis reports for pha
 在 `report_content.md` 的 `## 调研结果` 章节末尾，以 `### 5.3 建议` 为标题输出。前面必须已经输出 `### 5.1 问卷重点问题分析` 和 `### 5.2 调研结果总结`。
 
 ### 结构要求
-1. **导语**（1 段，50-80 字）：以「基于/结合调研结果，为进一步……，提出以下建议：」开头，必须点名 `{product}` 和本次调研发现的核心问题方向（如依从性、认知偏差、监测缺失等）。
+1. **导语**（1 段，建议 50-80 字；程序硬限制 40-120 字）：以「基于/结合调研结果，为进一步……，提出以下建议：」开头，必须点名 `{product}` 和本次调研发现的核心问题方向（如依从性、认知偏差、监测缺失等）。
 2. **分条建议**（2-4 条，不要写「（1）」这种中文编号，用阿拉伯数字+英文句点，如 `1. `）：
    - 每条建议前面**不加小标题**，直接以编号开头进入正文。
-   - 每条 80-150 字，总字数控制在 300-600 字。
+   - 每条 80-180 字，总字数控制在 300-600 字。
 
 ### 角度选择规则（动态池，不要求每次全选）
 AI 必须从以下角度池中**动态挑选 2-4 个最贴合本文分析结果的角度**，每次输出不要固定同样的组合，优先匹配前文暴露的真实问题：

@@ -5,6 +5,8 @@ import json
 import tempfile
 import unittest
 import copy
+import concurrent.futures
+import threading
 import xml.etree.ElementTree as ET
 from datetime import date, datetime
 from pathlib import Path
@@ -652,6 +654,85 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(ctx.exception.result["status"], "failed")
         self.assertTrue(any("4.1 / q01" in error for error in ctx.exception.errors))
         self.assertLessEqual(len(ctx.exception.result["checks"]), 40)
+
+    def test_preflight_rejects_invalid_5_1_and_5_3_before_build_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+
+        bad_content = copy.deepcopy(content)
+        bad_content["summary"]["key_issue_analysis"][0] = (
+            "本段围绕重点问题展开数据描述，结合患者反馈梳理主要现象与管理背景，"
+            "并从真实用药场景补充相关影响因素和后续关注方向。"
+            * 8
+        )[:280]
+        bad_content["summary"]["recommendations"] = [
+            bad_content["summary"]["recommendations"][0],
+            "1. 针对患者用药执行不稳定的问题，应持续完善干预方式并明确执行步骤，帮助患者理解规范用药的重要性，形成稳定习惯并提升长期管理质量。" * 2,
+            *bad_content["summary"]["recommendations"][2:],
+        ]
+
+        with self.assertRaises(PreflightError) as ctx:
+            preflight_report_content(
+                meta,
+                bad_content,
+                library=load_dimension_library(),
+                questionnaire=efficacy_questionnaire(),
+            )
+
+        self.assertTrue(any("5.1" in error and "analytical judgment" in error for error in ctx.exception.errors))
+        self.assertTrue(any("5.3" in error and "concrete tools or carriers" in error for error in ctx.exception.errors))
+
+    def test_preflight_explains_level_3_subtopic_heading(self) -> None:
+        markdown = sample_markdown().replace(
+            "#### 血压控制效果分析",
+            "### 4.1.1 血压控制效果分析",
+            1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(markdown, encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+
+        with self.assertRaises(PreflightError) as ctx:
+            preflight_report_content(
+                meta,
+                content,
+                library=load_dimension_library(),
+                questionnaire=efficacy_questionnaire(),
+            )
+
+        joined = "\n".join(ctx.exception.errors)
+        self.assertIn("4.1.1 血压控制效果分析", joined)
+        self.assertIn("use ####", joined)
+
+    def test_preflight_explains_unsupported_level_1_heading(self) -> None:
+        markdown = sample_markdown().replace("## 前言", "# 前言", 1)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(markdown, encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+
+        with self.assertRaises(PreflightError) as ctx:
+            preflight_report_content(
+                meta,
+                content,
+                library=load_dimension_library(),
+                questionnaire=efficacy_questionnaire(),
+            )
+
+        joined = "\n".join(ctx.exception.errors)
+        self.assertIn("# 前言", joined)
+        self.assertIn("use ##", joined)
+
+    def test_skill_documents_markdown_format_contract(self) -> None:
+        skill_text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("## Markdown Format Contract", skill_text)
+        self.assertIn("`### 4.1", skill_text)
+        self.assertIn("`####", skill_text)
+        self.assertIn("paragraphs", skill_text)
+        self.assertIn("提醒卡", skill_text)
 
     def test_preflight_theme_miss_suggests_limited_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1857,16 +1938,20 @@ class PipelineEntrypointTest(unittest.TestCase):
     def test_phase_names_match_documented_order(self) -> None:
         from scripts.run_report_pipeline import PHASE_NAMES
 
-        # The skill spec (Task 1) requires this exact ordered set so that
+        # The skill spec requires this exact ordered set so that
         # downstream perf tooling can rely on a stable schema.
+        # ai_content_generation and local_retry are optional phases
+        # recorded only when parallel/retry is used by external orchestration.
         self.assertEqual(
             PHASE_NAMES,
             (
                 "parse_questionnaire",
                 "preflight_content",
+                "ai_content_generation",
                 "build_payload",
                 "template_preflight",
                 "render_docx",
+                "local_retry",
                 "final_validate_docx",
                 "total",
             ),
@@ -2896,6 +2981,120 @@ class TemplateCleanupTest(unittest.TestCase):
         self.assertNotIn('replacements["广东省"]', source)
         self.assertNotIn('replacements["厄贝沙坦氢氯噻嗪片"]', source)
         self.assertNotIn("def _global_replace_in_xml", source)
+
+
+class TaskUnitHelpersTest(unittest.TestCase):
+    """Cover task-unit JSON I/O helpers used by parallel orchestration."""
+
+    def test_save_and_load_task_unit(self) -> None:
+        from scripts.run_report_pipeline import save_task_unit, load_task_results
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            save_task_unit(run_dir, "chapter4-batch-1", "q01", "分析正文第一题")
+            save_task_unit(run_dir, "chapter4-batch-1", "q02", "分析正文第二题")
+
+            results = load_task_results(run_dir, "chapter4-batch-1")
+            self.assertEqual(results["q01"], "分析正文第一题")
+            self.assertEqual(results["q02"], "分析正文第二题")
+
+    def test_load_task_results_returns_empty_for_missing_task(self) -> None:
+        from scripts.run_report_pipeline import load_task_results
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results = load_task_results(Path(tmp), "nonexistent")
+            self.assertEqual(results, {})
+
+    def test_save_task_unit_creates_tasks_directory(self) -> None:
+        from scripts.run_report_pipeline import save_task_unit
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            self.assertFalse((run_dir / "tasks").exists())
+            save_task_unit(run_dir, "task-1", "q01", "正文")
+            self.assertTrue((run_dir / "tasks").exists())
+            self.assertTrue((run_dir / "tasks" / "task-1.json").exists())
+
+    def test_concurrent_saves_to_same_task_preserve_every_unit(self) -> None:
+        from scripts.run_report_pipeline import load_task_results, save_task_unit
+
+        unit_count = 32
+        start = threading.Barrier(unit_count)
+
+        def save(index: int) -> None:
+            start.wait()
+            save_task_unit(run_dir, "summary-key-issue", f"unit-{index}", f"正文-{index}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=unit_count) as executor:
+                list(executor.map(save, range(unit_count)))
+
+            results = load_task_results(run_dir, "summary-key-issue")
+            self.assertEqual(len(results), unit_count)
+            for index in range(unit_count):
+                self.assertEqual(results[f"unit-{index}"], f"正文-{index}")
+
+
+class PreflightErrorMessageFormatTest(unittest.TestCase):
+    """Verify that preflight error messages follow the 实际值/期望值/修改方法 format."""
+
+    def test_4x_short_paragraph_error_contains_actual_and_expected(self) -> None:
+        from scripts.build_payload import require_ai_analysis_paragraphs
+
+        with self.assertRaises(ValueError) as ctx:
+            require_ai_analysis_paragraphs(
+                ["过短的正文。"],
+                section_number="4.1",
+                question_ref="q01",
+                subtitle="血压控制效果分析",
+            )
+        msg = str(ctx.exception)
+        self.assertIn("4.1 / q01 / 血压控制效果分析", msg)
+        self.assertIn("字", msg)
+        self.assertIn("250", msg)
+
+    def test_4x_extra_paragraphs_error_contains_actual_count(self) -> None:
+        from scripts.build_payload import require_ai_analysis_paragraphs
+
+        with self.assertRaises(ValueError) as ctx:
+            require_ai_analysis_paragraphs(
+                ["第一段内容。", "第二段内容。"],
+                section_number="4.2",
+                question_ref="q03",
+                subtitle="用药行为分析",
+            )
+        msg = str(ctx.exception)
+        self.assertIn("4.2 / q03 / 用药行为分析", msg)
+        self.assertIn("2", msg)
+        self.assertIn("1", msg)
+
+    def test_5_1_error_preserves_analytical_judgment_phrase(self) -> None:
+        from scripts.build_payload import choose_key_issue_analysis
+
+        # Paragraph is correct length (250-350 chars) but lacks analytical judgment word
+        # Use a long enough string that doesn't contain 说明/表明/反映/提示/判断
+        bad_para = "A" * 300
+        with self.assertRaises(ValueError) as ctx:
+            choose_key_issue_analysis([bad_para], 1)
+        msg = str(ctx.exception)
+        self.assertIn("analytical judgment", msg)
+
+    def test_5_3_error_preserves_concrete_tools_phrase(self) -> None:
+        from scripts.build_payload import choose_recommendations
+
+        # Intro is valid (40-120 chars, has 基于 and 建议)
+        # Items are 80-180 chars, have target keywords (针对/围绕), but no carrier keywords
+        # Total must be 300-600 chars to reach the carrier check
+        bad_recs = [
+            "基于本次调研结果，为进一步优化患者管理并解决当前存在的重点问题，加强患者支持服务和持续改进工作，提升整体服务水平并加强管理能力，提出以下建议。",
+            "1. 针对患者用药执行不稳定的问题，应持续完善干预方式并明确执行步骤，帮助患者理解规范用药的重要性，形成长期稳定习惯并提升整体管理质量，同时优化后续服务流程和复诊沟通机制，为后续患者管理提供更全面的参考依据和执行标准，持续改进患者服务体验。",
+            "2. 围绕血压监测不规律的问题，应加强监测频率和复诊沟通的管理，帮助患者形成规律监测习惯，优化治疗方案的执行效果，为后续患者管理提供更全面的数据支持和决策参考，提升整体服务质量水平和管理效率，同时优化患者体验和满意度评价。",
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            choose_recommendations(bad_recs, [])
+        msg = str(ctx.exception)
+        self.assertTrue("concrete tools or carriers" in msg or "载体" in msg)
 
 
 if __name__ == "__main__":
