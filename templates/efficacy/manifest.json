@@ -9,11 +9,27 @@
     "meta.product",
     "meta.region",
     "meta.template_doc",
-    "result_sections",
     "service.unit",
-    "service.date"
+    "service.date",
+    "preface",
+    "project_background",
+    "project_execution.lines",
+    "questionnaire_note.intro",
+    "questionnaire_note.items",
+    "questionnaire_note.closing",
+    "summary.overall_analysis",
+    "summary.recommendations",
+    "disclaimer.items"
   ],
-  "required_singletons": [],
+  "required_singletons": [
+    "{{block.preface}}",
+    "{{block.project_background}}",
+    "{{block.project_execution}}",
+    "{{block.questionnaire_note}}",
+    "{{block.summary.overall_analysis}}",
+    "{{block.summary.recommendations}}",
+    "{{block.disclaimer.items}}"
+  ],
   "optional_singletons": [],
   "field_placeholders": [
     "{{field.meta.product}}",

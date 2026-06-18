@@ -737,6 +737,49 @@ class TemplateRenderer:
                         pass
         return count
 
+    def _apply_block_placeholder(self, path: str, paragraphs: list[str]) -> int:
+        """Render a fixed paragraph block from one explicit prototype anchor.
+
+        The paragraph containing ``{{<path>}}`` is the style prototype. The
+        first payload item replaces the token in-place; additional items clone
+        that paragraph immediately after it. Empty blocks remove the prototype.
+        This keeps block location independent from headings and body indices.
+        """
+        token = "{{" + path + "}}"
+        prototype = next(
+            (
+                paragraph
+                for paragraph in self.body.iter(qn("w:p"))
+                if token in _get_paragraph_text(paragraph)
+            ),
+            None,
+        )
+        if prototype is None:
+            raise ValueError(f"Missing block placeholder: {token}")
+
+        parent = prototype.getparent()
+        if parent is None:
+            raise ValueError(f"Detached block placeholder: {token}")
+
+        values = [str(value) for value in paragraphs if str(value or "").strip()]
+        if not values:
+            parent.remove(prototype)
+            self._rebuild_anchors()
+            return 0
+
+        _replace_text_across_runs(prototype, token, values[0])
+        inserted = [prototype]
+        previous = prototype
+        for value in values[1:]:
+            clone = copy.deepcopy(prototype)
+            _overwrite_paragraph_text_preserve_run_style(clone, value)
+            previous.addnext(clone)
+            inserted.append(clone)
+            previous = clone
+
+        self._rebuild_anchors()
+        return len(inserted)
+
     def replace_metadata(self):
         """Replace all metadata placeholders."""
         product = self.meta.get("product", "")
@@ -798,49 +841,11 @@ class TemplateRenderer:
             self._replace_all_text("2025年12月11日", service_date)
 
     def replace_preface(self):
-        """Replace preface text while preserving the template title anchor."""
+        """Render preface from the explicit block prototype."""
         preface = self.payload.get("preface", [])
         if not preface:
             return
-
-        idx = self._find_anchor_index("前言")
-        if idx is None:
-            return
-
-        heading = self._get_paragraph_at(idx)
-        _strip_numPr(heading)
-        _set_paragraph_style_props(heading, "宋体", 22, True, "center")
-
-        title_idx = self._find_anchor_index("调查问卷分析报告", start=idx + 1)
-        if title_idx is None:
-            title_idx = idx + 2
-
-        body_paragraphs = []
-        for i in range(idx + 1, title_idx):
-            info = self.anchors.get(i)
-            if info and info["type"] == "p" and _get_paragraph_text(info["elem"]).strip():
-                body_paragraphs.append(info["elem"])
-
-        if not body_paragraphs:
-            return
-
-        insert_before = self.anchors[title_idx]["elem"] if title_idx in self.anchors else body_paragraphs[-1]
-        template_paragraph = body_paragraphs[-1]
-        while len(body_paragraphs) < len(preface):
-            cloned = copy.deepcopy(template_paragraph)
-            insert_before.addprevious(cloned)
-            body_paragraphs.append(cloned)
-
-        for index, paragraph in enumerate(body_paragraphs):
-            if index < len(preface):
-                _set_paragraph_text(paragraph, preface[index])
-                _set_paragraph_style_props(paragraph, "宋体", 12, False)
-            else:
-                parent = paragraph.getparent()
-                if parent is not None:
-                    parent.remove(paragraph)
-
-        self._rebuild_anchors()
+        self._apply_block_placeholder("block.preface", preface)
 
     def replace_report_title(self):
         """Replace the report title paragraph."""
@@ -860,43 +865,14 @@ class TemplateRenderer:
         _set_paragraph_style_props(p, "宋体", 22, True, "center")
 
     def replace_project_background(self):
-        """Replace project background paragraphs with structured 4-section content."""
+        """Render project background from the explicit block prototype."""
         paragraphs = self.payload.get("project_background", [])
         if not paragraphs:
             return
-
-        # Find "项目背景" heading
-        idx = self._find_anchor_index("项目背景")
-        if idx is None:
-            return
-
-        heading = self._get_paragraph_at(idx)
-        _set_paragraph_style_props(heading, "宋体", 16, True, "left")
-
-        # Background paragraphs follow the heading
-        bg_indices = []
-        for i in range(idx + 1, idx + 20):
-            if i in self.anchors and self.anchors[i]["type"] == "p":
-                text = self.anchors[i]["text"]
-                if "项目开展情况" in text or "问卷说明" in text or text.strip().startswith("二、"):
-                    break
-                bg_indices.append(i)
-            else:
-                break
-
-        # Replace with payload paragraphs
-        for pi, bi in enumerate(bg_indices):
-            if pi < len(paragraphs):
-                p = self._get_paragraph_at(bi)
-                _set_paragraph_text(p, paragraphs[pi])
-                _set_paragraph_style_props(p, "宋体", 12, False)
-            else:
-                # Remove extra template paragraphs
-                p = self._get_paragraph_at(bi)
-                p.getparent().remove(p)
+        self._apply_block_placeholder("block.project_background", paragraphs)
 
     def replace_project_execution(self):
-        """Replace project execution paragraphs."""
+        """Render project execution from the explicit block prototype."""
         pe = self.payload.get("project_execution", {})
         if not pe:
             return
@@ -904,78 +880,19 @@ class TemplateRenderer:
         lines = pe.get("lines", [])
         if not lines:
             return
-
-        title_idx = self._find_anchor_index("项目开展情况")
-        if title_idx is None:
-            return
-        heading = self._get_paragraph_at(title_idx)
-        _set_paragraph_style_props(heading, "宋体", 16, True, "left")
-
-        target_indices = []
-        for i in range(title_idx + 1, title_idx + 12):
-            if i not in self.anchors:
-                break
-            info = self.anchors[i]
-            if info["type"] != "p":
-                break
-            text = info["text"].strip()
-            if text in {"问卷说明", "三、问卷说明"}:
-                break
-            if text:
-                target_indices.append(i)
-
-        for line_index, line in enumerate(lines):
-            if line_index < len(target_indices):
-                p = self._get_paragraph_at(target_indices[line_index])
-                _set_paragraph_text(p, line)
-                _set_paragraph_style_props(p, "宋体", 12, False)
-        for extra_idx in target_indices[len(lines):]:
-            p = self._get_paragraph_at(extra_idx)
-            p.getparent().remove(p)
+        self._apply_block_placeholder("block.project_execution", lines)
 
     def replace_questionnaire_note(self):
-        """Replace questionnaire note paragraphs."""
+        """Render questionnaire note from the explicit block prototype."""
         qn_data = self.payload.get("questionnaire_note", {})
         if not qn_data:
             return
-
-        # Find "问卷说明" heading
-        idx = self._find_anchor_index("问卷说明")
-        if idx is None:
-            return
-        heading = self._get_paragraph_at(idx)
-        _set_paragraph_style_props(heading, "宋体", 16, True, "left")
-
-        # Intro paragraph (first after heading)
-        intro_idx = idx + 1
-        if intro_idx in self.anchors:
-            p = self._get_paragraph_at(intro_idx)
-            _set_paragraph_text(p, qn_data.get("intro", ""))
-            _set_paragraph_style_props(p, "宋体", 12, False)
-
-        # Items: find the numbered items (1．, 2．, 3．, 4．)
-        items = qn_data.get("items", [])
-        item_indices = []
-        for i in range(intro_idx + 1, intro_idx + 10):
-            if i in self.anchors and self.anchors[i]["type"] == "p":
-                text = self.anchors[i]["text"]
-                if text.startswith(("1", "2", "3", "4")) and "．" in text[:3]:
-                    item_indices.append(i)
-                elif len(item_indices) >= len(items):
-                    break
-
-        for pi, bi in enumerate(item_indices):
-            if pi < len(items):
-                p = self._get_paragraph_at(bi)
-                _set_paragraph_text(p, items[pi])
-                _set_paragraph_style_props(p, "宋体", 12, False)
-
-        # Closing paragraph (after items)
-        closing_idx = (item_indices[-1] + 1) if item_indices else intro_idx + 5
-        if closing_idx in self.anchors:
-            p = self._get_paragraph_at(closing_idx)
-            _set_paragraph_text(p, qn_data.get("closing", ""))
-            _set_paragraph_style_props(p, "宋体", 12, False)
+        paragraphs = [
+            qn_data.get("intro", ""),
+            *qn_data.get("items", []),
+            qn_data.get("closing", ""),
+        ]
+        self._apply_block_placeholder("block.questionnaire_note", paragraphs)
 
     def replace_result_analysis_intro(self):
         """Replace the intro paragraph for 问卷结果分析."""
@@ -1281,21 +1198,17 @@ class TemplateRenderer:
         # 5.2 调研结果总结
         overall = summary.get("overall_analysis", [])
         if overall:
-            self._replace_section_body_by_heading(
-                "5.2调研结果总结",
-                "5.3建议",
+            self._apply_block_placeholder(
+                "block.summary.overall_analysis",
                 overall,
             )
 
         # 5.3 建议
         recommendations = summary.get("recommendations", [])
         if recommendations:
-            self._replace_section_body_by_heading(
-                "5.3建议",
-                "附件1",
+            self._apply_block_placeholder(
+                "block.summary.recommendations",
                 recommendations,
-                end_heading_prefix=True,
-                fail_if_missing=True,
             )
 
     def _ensure_summary_headings(self):
@@ -1693,47 +1606,42 @@ class TemplateRenderer:
         self._rebuild_anchors()
 
     def replace_disclaimer(self):
-        """Replace disclaimer section."""
+        """Render disclaimer items from the explicit block prototype."""
         disclaimer = self.payload.get("disclaimer", {})
         items = disclaimer.get("items", [])
+        heading_idx = self._find_exact_paragraph_index("免责申明")
+        if heading_idx is not None:
+            heading = self._get_paragraph_at(heading_idx)
+            _set_paragraph_style_props(heading, "宋体", 16, True, "center")
+        if items:
+            self._apply_block_placeholder("block.disclaimer.items", items)
+            item_texts = {str(item).strip() for item in items}
+            for paragraph in self.body.iter(qn("w:p")):
+                if _get_paragraph_text(paragraph).strip() in item_texts:
+                    _set_paragraph_style_props(
+                        paragraph,
+                        "宋体",
+                        12,
+                        False,
+                        "both",
+                        body_layout=True,
+                        first_line_chars=0,
+                    )
+
         unit = self.payload.get("service", {}).get("unit", disclaimer.get("unit", ""))
         date_str = self.payload.get("service", {}).get("date", disclaimer.get("date", ""))
-
-        # Find "免责申明" heading
-        idx = self._find_anchor_index("免责申明")
-        if idx is None:
-            return
-        heading = self._get_paragraph_at(idx)
-        _set_paragraph_style_props(heading, "宋体", 16, True, "center")
-
-        # Replace disclaimer items and right-aligned signature lines.
-        item_count = 0
-        unit_replaced = False
-        date_replaced = False
-        for i in range(idx + 1, idx + 40):
-            if i not in self.anchors:
-                break
-            info = self.anchors[i]
-            if info["type"] != "p":
-                continue
-            text = info["text"].strip()
-            if "服务提供单位" in text:
-                p = self._get_paragraph_at(i)
-                _set_paragraph_text(p, f"服务提供单位:{unit}")
-                _set_paragraph_style_props(p, "宋体", 12, False, "right", body_layout=True, first_line_chars=0)
-                unit_replaced = True
-                continue
-            if re.match(r"20\d{2}年", text):
-                p = self._get_paragraph_at(i)
-                _set_paragraph_text(p, date_str)
-                _set_paragraph_style_props(p, "宋体", 12, False, "right", body_layout=True, first_line_chars=0)
-                date_replaced = True
-                continue
-            if text.startswith("（") and item_count < len(items):
-                p = self._get_paragraph_at(i)
-                _set_paragraph_text(p, items[item_count])
-                _set_paragraph_style_props(p, "宋体", 12, False, "both", body_layout=True, first_line_chars=0)
-                item_count += 1
+        signature_texts = {f"服务提供单位:{unit}", date_str}
+        for paragraph in self.body.iter(qn("w:p")):
+            if _get_paragraph_text(paragraph).strip() in signature_texts:
+                _set_paragraph_style_props(
+                    paragraph,
+                    "宋体",
+                    12,
+                    False,
+                    "right",
+                    body_layout=True,
+                    first_line_chars=0,
+                )
 
     def restyle_key_issue_titles(self):
         """Force 5.1 custom sub-headings back to title layout after body formatting."""

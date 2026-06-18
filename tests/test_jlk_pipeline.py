@@ -2322,17 +2322,25 @@ class TemplatePreflightTest(unittest.TestCase):
                 "unit": "测试服务商",
                 "date": "2026-01-01",
             },
-            "result_sections": [],
+            "preface": ["p1", "p2"],
+            "project_background": ["b1", "b2"],
+            "project_execution": {"lines": ["line"]},
+            "questionnaire_note": {
+                "intro": "intro",
+                "items": ["item"],
+                "closing": "closing",
+            },
+            "summary": {
+                "overall_analysis": ["overall"],
+                "recommendations": ["recommendation"],
+            },
+            "disclaimer": {"items": ["item"]},
         }
         result = preflight_template(contract, payload, mode="warning")
-        # The bundled template now contains the six {{field.*}} placeholders
-        # inserted by Task 5; required_singletons stays empty so any extra
-        # repetition is permitted. The manifest must therefore preflight
-        # clean for a complete-but-minimal payload.
+        # The bundled template contains Task 5 fields plus Task 6 block
+        # singletons and must preflight clean for a complete minimal payload.
         self.assertEqual(result["status"], "ok", msg=result)
-        # 6 distinct placeholders should be detected (13 total occurrences,
-        # but only the distinct count is asserted here).
-        self.assertEqual(result["metrics"]["distinct_placeholders"], 6)
+        self.assertEqual(result["metrics"]["distinct_placeholders"], 13)
 
 
 class TemplateEngineTest(unittest.TestCase):
@@ -2564,6 +2572,64 @@ class FieldPlaceholderTemplateTest(unittest.TestCase):
         self.assertIn("湖南省", body_text)
         self.assertIn("2025年7月1日—7月31日", body_text)
         self.assertIn("1234", body_text)
+
+
+class BlockPlaceholderTemplateTest(unittest.TestCase):
+    """Cover Task 6: fixed narrative blocks use explicit block anchors."""
+
+    EXPECTED_TOKENS = (
+        "{{block.preface}}",
+        "{{block.project_background}}",
+        "{{block.project_execution}}",
+        "{{block.questionnaire_note}}",
+        "{{block.summary.overall_analysis}}",
+        "{{block.summary.recommendations}}",
+        "{{block.disclaimer.items}}",
+    )
+
+    def test_bundled_template_contains_all_block_placeholders(self) -> None:
+        from scripts.template_preflight import scan_template_placeholders
+
+        template_path = ROOT / "templates" / "efficacy-report-template.docx"
+        occurrences = scan_template_placeholders(template_path)
+        for token in self.EXPECTED_TOKENS:
+            with self.subTest(token=token):
+                self.assertEqual(
+                    len(occurrences.get(token, [])),
+                    1,
+                    f"{token} must appear exactly once",
+                )
+
+    def test_apply_block_placeholder_clones_prototype_and_preserves_style(self) -> None:
+        from docx import Document
+        from docx.oxml.ns import qn
+        from scripts.render_from_template import TemplateRenderer
+
+        with tempfile.TemporaryDirectory() as tmp:
+            template_path = Path(tmp) / "block.docx"
+            doc = Document()
+            prototype = doc.add_paragraph()
+            first = prototype.add_run("{{block.")
+            first.bold = True
+            prototype.add_run("preface}}")
+            doc.add_paragraph("after")
+            doc.save(template_path)
+
+            renderer = TemplateRenderer(template_path, {})
+            count = renderer._apply_block_placeholder(
+                "block.preface",
+                ["第一段", "第二段", "第三段"],
+            )
+
+            self.assertEqual(count, 3)
+            texts = [
+                "".join(t.text or "" for t in child.findall(".//" + qn("w:t")))
+                for child in renderer.body
+                if child.tag == qn("w:p")
+            ]
+            self.assertEqual(texts[:4], ["第一段", "第二段", "第三段", "after"])
+            first_run = renderer.body[0].find(qn("w:r"))
+            self.assertIsNotNone(first_run.find(qn("w:rPr") + "/" + qn("w:b")))
 
 
 if __name__ == "__main__":
