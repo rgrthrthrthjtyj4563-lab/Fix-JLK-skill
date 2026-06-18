@@ -5,4 +5,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .playwright-mcp/
-tmp/runs/
+.cowork-temp/
+tmp/
+.coverage
+*.bak
+*.tmp

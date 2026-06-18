@@ -1,16 +1,9 @@
 ---
-name: "Fix-JLK-skill"
+name: "fix-jlk-skill"
 description: "Use when generating patient questionnaire analysis reports for pharmaceutical clients from uploaded survey spreadsheets or questionnaire tables, especially when the output must inherit the original Word template, including TOC, preface, header, title hierarchy, tables, and chart styles."
 ---
 
 # JLK Patient Report Skill
-
-## Template Rendering Refactor
-
-对内置 Word 模板、占位符、模板 manifest、动态块渲染或渲染性能进行修改前，必须先完整阅读
-`references/template-placeholder-rendering-spec.md`。该文档定义本仓库模板改造的目标架构、非目标、
-占位符协议、迁移顺序、测试要求和最终审核门禁。不得把本改造扩展为独立模板管理系统。
-如需把改造任务交给另一个 AI，使用 `references/template-refactor-agent-prompt.md` 中的完整执行提示词。
 
 ## When To Use
 - 输入是患者问卷数据或问卷统计表。
@@ -114,81 +107,8 @@ description: "Use when generating patient questionnaire analysis reports for pha
 - Markdown 正文不需要写字段名。解析后的每个子主题正文存入内部字段 `paragraphs`；不要构造或依赖名为 `analysis` 的字段。
 - 标题标记后必须有空格，例如 `#### 用药行为分析`，不要写成 `####用药行为分析`。
 
-### 可直接复制的完整骨架
-
-下面这份骨架可作为 `report_content.md` 的起点。括号注释只是说明，正式草稿应直接替换为正文文本：
-
-```markdown
----
-product: （品种名）
-region: （地区名）
-survey_period: （如 2025年03月01日——2025年03月31日）
-theme: （固定维度表中的 theme_name，可留空）
-valid_count: （有效问卷数）
-key_issue_question_refs: '["q02", "q05"]'
----
-
-## 前言
-
-（第 1 段：疾病/品类背景 → 产品价值 → 区域与对象 → 调研目的，约 200 字）
-
-（第 2 段：分析层面说明 → 应用价值，约 200 字）
-
-## 项目背景
-
-（第 1 段：宏观背景/区域特征）
-
-（第 2 段：现有数据缺口/调研必要性）
-
-## 项目开展情况
-
-（程序生成，AI 可选覆盖）
-
-## 问卷说明
-
-（程序生成，AI 可选覆盖）
-
-## 问卷结果分析
-
-（导语段，程序自动拼接维度名称与数量）
-
-### 4.1 维度名称
-
-#### 小标题
-
-（该题唯一一段 250-300 字分析正文，必须包含数字百分比、判断词、收束词；
-禁止 A/B/C/D 字母选项列举或建议性措辞）
-
-#### 小标题
-
-（同上格式）
-
-### 4.2 维度名称
-
-#### 小标题
-
-（同上格式）
-
-## 调研结果
-
-### 5.1 问卷重点问题分析
-
-（第 1 段，250-350 字，对应 key_issue_question_refs[0]）
-
-（第 2 段，250-350 字，对应 key_issue_question_refs[1]）
-
-### 5.2 调研结果总结
-
-（3-5 段，总字数 ≤ 700，必须点名品种或地区，包含分析判断词）
-
-### 5.3 建议
-
-（导语 1 段，40-120 字，以「基于/结合调研结果」开头并点名品种）
-
-1. （建议条目，80-180 字，包含目标词与具体载体关键词）
-
-2. （同上格式）
-```
+完整可复制骨架和错误示例见 `references/report-content-template.md`。需要生成或修复
+`report_content.md` 时读取该文件，避免在主 skill 中重复加载大段模板。
 
 ### 4.x 单题正文硬校验
 
