@@ -2326,5 +2326,158 @@ class TemplatePreflightTest(unittest.TestCase):
         self.assertEqual(result["status"], "ok", msg=result)
 
 
+class TemplateEngineTest(unittest.TestCase):
+    """Cover Task 4: scripts/template_engine.py cross-run replacement."""
+
+    W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+    def _p_from_xml(self, body_xml: str):
+        """Parse a fragment such as ``<w:p>...</w:p>`` into an lxml element.
+
+        We use lxml here (not stdlib ElementTree) because the production
+        primitives append OxmlElement instances which are lxml-based; mixing
+        the two element trees raises TypeError when the engine inserts a
+        new ``w:t`` into a stdlib parent.
+        """
+        from lxml import etree
+
+        wrapped = (
+            f"<w:document xmlns:w='{self.W}' xmlns:a='http://schemas.openxmlformats.org/drawingml/2006/main' xmlns:wp='http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'>"
+            f"<w:body>{body_xml}</w:body></w:document>"
+        )
+        root = etree.fromstring(wrapped.encode("utf-8"))
+        body = root.find(f"{{{self.W}}}body")
+        return body[0]
+
+    def _text_of(self, p_element) -> str:
+        return "".join(
+            (t.text or "")
+            for t in p_element.findall(f".//{{{self.W}}}t")
+        )
+
+    def test_get_paragraph_text_concatenates_runs(self) -> None:
+        from scripts.template_engine import get_paragraph_text
+
+        p = self._p_from_xml(
+            "<w:p>"
+            "<w:r><w:t>Hello </w:t></w:r>"
+            "<w:r><w:t>world</w:t></w:r>"
+            "</w:p>"
+        )
+        self.assertEqual(get_paragraph_text(p), "Hello world")
+
+    def test_replace_text_across_runs_handles_split_placeholder(self) -> None:
+        from scripts.template_engine import replace_text_across_runs
+
+        p = self._p_from_xml(
+            "<w:p>"
+            "<w:r><w:t>{{fie</w:t></w:r>"
+            "<w:r><w:t>ld.meta.</w:t></w:r>"
+            "<w:r><w:t>product}}</w:t></w:r>"
+            "</w:p>"
+        )
+        replaced = replace_text_across_runs(p, "{{field.meta.product}}", "心达康")
+        self.assertTrue(replaced)
+        self.assertEqual(self._text_of(p), "心达康")
+
+    def test_replace_text_across_runs_preserves_first_run_style(self) -> None:
+        from scripts.template_engine import replace_text_across_runs
+
+        p = self._p_from_xml(
+            "<w:p>"
+            "<w:r><w:rPr><w:b/></w:rPr><w:t>{{fie</w:t></w:r>"
+            "<w:r><w:t>ld.meta.product}}</w:t></w:r>"
+            "</w:p>"
+        )
+        replace_text_across_runs(p, "{{field.meta.product}}", "心达康")
+        first_run = p.findall(f"{{{self.W}}}r")[0]
+        rpr = first_run.find(f"{{{self.W}}}rPr")
+        self.assertIsNotNone(rpr, "first run rPr must survive replacement")
+        self.assertIsNotNone(rpr.find(f"{{{self.W}}}b"), "bold must survive replacement")
+
+    def test_replace_text_across_runs_returns_false_when_token_absent(self) -> None:
+        from scripts.template_engine import replace_text_across_runs
+
+        p = self._p_from_xml("<w:p><w:r><w:t>plain text</w:t></w:r></w:p>")
+        self.assertFalse(replace_text_across_runs(p, "{{missing}}", "x"))
+        self.assertEqual(self._text_of(p), "plain text")
+
+    def test_safe_replace_in_paragraph_keeps_drawing_intact(self) -> None:
+        from scripts.template_engine import safe_replace_in_paragraph, paragraph_has_drawing
+
+        p = self._p_from_xml(
+            "<w:p>"
+            "<w:r><w:t>before {{token}} after</w:t></w:r>"
+            "<w:r><w:drawing><wp:inline xmlns:wp='http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'/></w:drawing></w:r>"
+            "</w:p>"
+        )
+        self.assertTrue(paragraph_has_drawing(p))
+        safe_replace_in_paragraph(p, "{{token}}", "REPLACED")
+        # Drawing element must still be present.
+        drawings = p.findall(f".//{{{self.W}}}drawing")
+        self.assertEqual(len(drawings), 1, "drawing element must survive replacement")
+        # Replacement must have happened in the text run.
+        text_runs = [
+            r for r in p.findall(f"{{{self.W}}}r")
+            if r.find(f"{{{self.W}}}drawing") is None
+        ]
+        joined = "".join(
+            (t.text or "")
+            for r in text_runs
+            for t in r.findall(f"{{{self.W}}}t")
+        )
+        self.assertIn("REPLACED", joined)
+        self.assertNotIn("{{token}}", joined)
+
+    def test_safe_replace_in_paragraph_falls_back_to_simple_when_no_drawing(self) -> None:
+        from scripts.template_engine import safe_replace_in_paragraph
+
+        p = self._p_from_xml(
+            "<w:p>"
+            "<w:r><w:t>before {{token}} </w:t></w:r>"
+            "<w:r><w:t>after</w:t></w:r>"
+            "</w:p>"
+        )
+        safe_replace_in_paragraph(p, "{{token}}", "REPLACED")
+        self.assertEqual(self._text_of(p), "before REPLACED after")
+
+    def test_overwrite_paragraph_text_preserves_first_run_style(self) -> None:
+        from scripts.template_engine import overwrite_paragraph_text_preserve_run_style
+
+        p = self._p_from_xml(
+            "<w:p>"
+            "<w:r><w:rPr><w:b/></w:rPr><w:t>old text</w:t></w:r>"
+            "<w:r><w:t>more old</w:t></w:r>"
+            "</w:p>"
+        )
+        overwrite_paragraph_text_preserve_run_style(p, "fresh content")
+        self.assertEqual(self._text_of(p), "fresh content")
+        rpr = p.findall(f"{{{self.W}}}r")[0].find(f"{{{self.W}}}rPr")
+        self.assertIsNotNone(rpr.find(f"{{{self.W}}}b"))
+
+    def test_set_run_text_creates_t_when_missing(self) -> None:
+        from scripts.template_engine import set_run_text
+
+        p = self._p_from_xml("<w:p><w:r><w:rPr/></w:r></w:p>")
+        run = p.find(f"{{{self.W}}}r")
+        set_run_text(run, "injected")
+        ts = run.findall(f"{{{self.W}}}t")
+        self.assertEqual(len(ts), 1)
+        self.assertEqual(ts[0].text, "injected")
+        self.assertEqual(ts[0].get(f"{{http://www.w3.org/XML/1998/namespace}}space"), "preserve")
+
+    def test_replace_in_paragraph_with_no_drawing_table_cell_pattern(self) -> None:
+        """Multiple placeholders in one paragraph - common in 4.x tables."""
+        from scripts.template_engine import replace_text_across_runs
+
+        p = self._p_from_xml(
+            "<w:p>"
+            "<w:r><w:t>调研时间：{{field.meta.survey_period}}</w:t></w:r>"
+            "</w:p>"
+        )
+        replace_text_across_runs(p, "{{field.meta.survey_period}}", "2025年11月1日-11月30日")
+        self.assertEqual(self._text_of(p), "调研时间：2025年11月1日-11月30日")
+
+
 if __name__ == "__main__":
     unittest.main()

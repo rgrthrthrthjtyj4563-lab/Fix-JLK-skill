@@ -33,6 +33,29 @@ from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.text.paragraph import Paragraph
 
+try:
+    from .template_engine import (
+        get_paragraph_text as _get_paragraph_text,
+        overwrite_paragraph_text_preserve_run_style as _overwrite_paragraph_text_preserve_run_style,
+        paragraph_has_drawing as _paragraph_has_drawing,
+        replace_text_across_runs as _replace_text_across_runs,
+        replace_text_in_paragraph as _replace_text_in_paragraph,
+        safe_replace_in_paragraph as _engine_safe_replace_in_paragraph,
+        set_paragraph_text as _set_paragraph_text,
+        set_run_text as _set_run_text,
+    )
+except ImportError:  # pragma: no cover - script-style import
+    from template_engine import (
+        get_paragraph_text as _get_paragraph_text,
+        overwrite_paragraph_text_preserve_run_style as _overwrite_paragraph_text_preserve_run_style,
+        paragraph_has_drawing as _paragraph_has_drawing,
+        replace_text_across_runs as _replace_text_across_runs,
+        replace_text_in_paragraph as _replace_text_in_paragraph,
+        safe_replace_in_paragraph as _engine_safe_replace_in_paragraph,
+        set_paragraph_text as _set_paragraph_text,
+        set_run_text as _set_run_text,
+    )
+
 
 # ─── OOXML Namespace constants ───────────────────────────────────────────────
 NS = {
@@ -56,14 +79,11 @@ _register_namespaces()
 
 
 # ─── Helper: OOXML manipulation ──────────────────────────────────────────────
-
-def _get_paragraph_text(p_element) -> str:
-    """Extract plain text from a w:p element."""
-    texts = []
-    for r in p_element.findall(qn("w:r")):
-        for t in r.findall(qn("w:t")):
-            texts.append(t.text or "")
-    return "".join(texts)
+# The cross-run text primitives (_get_paragraph_text, _set_paragraph_text,
+# _overwrite_paragraph_text_preserve_run_style, _paragraph_has_drawing,
+# _set_run_text, _replace_text_across_runs, _replace_text_in_paragraph) live
+# in scripts/template_engine.py and are imported above. Only renderer-specific
+# helpers remain in this module.
 
 
 def _strip_numPr(p_element) -> None:
@@ -73,116 +93,6 @@ def _strip_numPr(p_element) -> None:
         numPr = pPr.find(qn("w:numPr"))
         if numPr is not None:
             pPr.remove(numPr)
-
-
-def _set_paragraph_text(p_element, text: str):
-    """Replace all runs in a paragraph with a single run containing `text`."""
-    # Remove all existing runs
-    for r in list(p_element.findall(qn("w:r"))):
-        p_element.remove(r)
-    # Add new run
-    r = OxmlElement("w:r")
-    rPr = OxmlElement("w:rPr")
-    r.append(rPr)
-    t = OxmlElement("w:t")
-    t.set(qn("xml:space"), "preserve")
-    t.text = text
-    r.append(t)
-    # Copy font properties from first run's rPr if available (keep styling)
-    p_element.insert(0, r)
-
-
-def _overwrite_paragraph_text_preserve_run_style(p_element, text: str):
-    """Overwrite paragraph text while preserving the first run's styling."""
-    runs = p_element.findall(qn("w:r"))
-    text_runs = [r for r in runs if r.find(qn("w:drawing")) is None]
-    if not text_runs:
-        _set_paragraph_text(p_element, text)
-        return
-
-    first_run = text_runs[0]
-    first_text = first_run.find(qn("w:t"))
-    if first_text is None:
-        first_text = OxmlElement("w:t")
-        first_run.append(first_text)
-    first_text.set(qn("xml:space"), "preserve")
-    first_text.text = text
-
-    for run in text_runs[1:]:
-        for t in run.findall(qn("w:t")):
-            t.text = ""
-
-
-def _paragraph_has_drawing(p_element) -> bool:
-    return any(
-        run.find(qn("w:drawing")) is not None or run.find(qn("w:pict")) is not None
-        for run in p_element.findall(qn("w:r"))
-    )
-
-
-def _set_run_text(run_element, text: str):
-    """Replace text in a specific w:r element."""
-    for t in run_element.findall(qn("w:t")):
-        t.text = text
-        t.set(qn("xml:space"), "preserve")
-        break
-    else:
-        t = OxmlElement("w:t")
-        t.set(qn("xml:space"), "preserve")
-        t.text = text
-        run_element.append(t)
-
-
-def _replace_text_across_runs(p_element, old_text: str, new_text: str) -> bool:
-    """Find `old_text` across runs and replace it with `new_text`. Returns True if replaced."""
-    full_text = _get_paragraph_text(p_element)
-    if old_text not in full_text:
-        return False
-
-    # Simple approach: join all text, do replacement, then distribute back
-    runs = p_element.findall(qn("w:r"))
-    if not runs:
-        return False
-
-    # Collect all text segments
-    segments = []
-    for r in runs:
-        for t in r.findall(qn("w:t")):
-            segments.append((r, t))
-
-    # Build full text
-    full = "".join(t.text or "" for _, t in segments)
-
-    # Replace
-    full = full.replace(old_text, new_text)
-
-    # For simplicity, put everything in first run and clear others
-    if segments:
-        first_t = segments[0][1]
-        first_t.text = full
-        first_t.set(qn("xml:space"), "preserve")
-        for _, t in segments[1:]:
-            t.text = ""
-
-    return True
-
-
-def _replace_text_in_paragraph(p_element, old: str, new: str) -> bool:
-    """Replace all occurrences of `old` with `new` in paragraph text."""
-    full = _get_paragraph_text(p_element)
-    if old not in full:
-        return False
-    new_full = full.replace(old, new)
-    # Clear and rebuild
-    for r in list(p_element.findall(qn("w:r"))):
-        p_element.remove(r)
-    r = OxmlElement("w:r")
-    t = OxmlElement("w:t")
-    t.set(qn("xml:space"), "preserve")
-    t.text = new_full
-    r.append(t)
-    p_element.append(r)
-    return True
 
 
 def _darken_hex(color: str, factor: float) -> str:
@@ -784,22 +694,8 @@ class TemplateRenderer:
                     pass
 
     def _safe_replace_in_paragraph(self, p_element, old: str, new: str):
-        """Replace text in a paragraph, preserving drawings."""
-        has_drawing = any(
-            r.find(qn("w:drawing")) is not None
-            for r in p_element.findall(qn("w:r"))
-        )
-        if has_drawing:
-            for r in p_element.findall(qn("w:r")):
-                drawing = r.find(qn("w:drawing"))
-                if drawing is not None:
-                    continue
-                for t in r.findall(qn("w:t")):
-                    if t.text and old in t.text:
-                        t.text = t.text.replace(old, new)
-                        t.set(qn("xml:space"), "preserve")
-        else:
-            _replace_text_in_paragraph(p_element, old, new)
+        """Replace text in a paragraph, preserving drawings. Delegates to template_engine."""
+        _engine_safe_replace_in_paragraph(p_element, old, new)
 
     def replace_metadata(self):
         """Replace all metadata placeholders."""
