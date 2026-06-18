@@ -22,11 +22,14 @@ Stable error codes (mirrors the spec)::
     INVALID_PLACEHOLDER       - placeholder uses unknown {{kind.path}} prefix
     TEMPLATE_TYPE_MISMATCH    - manifest template_type vs. payload meta mismatch
     INVALID_CHART_MODE        - payload chart render_mode not in allowlist
+    MISSING_BLOCK_BOUNDARY    - repeat bookmark start/end is absent
+    INVALID_BLOCK_BOUNDARY    - repeat bookmark is duplicated/reversed/crossed
 """
 from __future__ import annotations
 
 import re
 import zipfile
+import xml.etree.ElementTree as ET
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -254,6 +257,85 @@ def _check_chart_modes(
                 )
 
 
+def _check_repeat_bookmarks(
+    contract: TemplateContract,
+    template_path: Path,
+    issues: list[_Issue],
+) -> None:
+    if not contract.repeat_bookmarks:
+        return
+    with zipfile.ZipFile(template_path) as zipped:
+        root = ET.fromstring(zipped.read("word/document.xml"))
+
+    w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    name_attr = f"{{{w}}}name"
+    id_attr = f"{{{w}}}id"
+    ordered = list(root.iter())
+    positions = {id(node): index for index, node in enumerate(ordered)}
+    intervals: list[tuple[int, int, str]] = []
+
+    for token, bookmark_name in contract.repeat_bookmarks.items():
+        starts = [
+            node
+            for node in root.iter(f"{{{w}}}bookmarkStart")
+            if node.get(name_attr) == bookmark_name
+        ]
+        if len(starts) != 1:
+            code = "MISSING_BLOCK_BOUNDARY" if not starts else "INVALID_BLOCK_BOUNDARY"
+            issues.append(
+                _Issue(
+                    code=code,
+                    message=f"repeat bookmark start count={len(starts)}: {bookmark_name}",
+                    location=token,
+                )
+            )
+            continue
+
+        bookmark_id = starts[0].get(id_attr)
+        ends = [
+            node
+            for node in root.iter(f"{{{w}}}bookmarkEnd")
+            if node.get(id_attr) == bookmark_id
+        ]
+        if len(ends) != 1:
+            code = "MISSING_BLOCK_BOUNDARY" if not ends else "INVALID_BLOCK_BOUNDARY"
+            issues.append(
+                _Issue(
+                    code=code,
+                    message=f"repeat bookmark end count={len(ends)}: {bookmark_name}",
+                    location=token,
+                )
+            )
+            continue
+
+        start_pos = positions[id(starts[0])]
+        end_pos = positions[id(ends[0])]
+        if end_pos <= start_pos:
+            issues.append(
+                _Issue(
+                    code="INVALID_BLOCK_BOUNDARY",
+                    message=f"repeat bookmark is reversed: {bookmark_name}",
+                    location=token,
+                )
+            )
+            continue
+        intervals.append((start_pos, end_pos, bookmark_name))
+
+    for index, (start, end, name) in enumerate(intervals):
+        for other_start, other_end, other_name in intervals[index + 1:]:
+            if (
+                start < other_start < end < other_end
+                or other_start < start < other_end < end
+            ):
+                issues.append(
+                    _Issue(
+                        code="INVALID_BLOCK_BOUNDARY",
+                        message=f"repeat bookmarks cross: {name}, {other_name}",
+                        location=name,
+                    )
+                )
+
+
 def preflight_template(
     contract: TemplateContract,
     payload: dict,
@@ -280,6 +362,7 @@ def preflight_template(
     _check_singletons(contract, template_path, issues)
     _check_invalid_placeholders(template_path, issues)
     _check_chart_modes(contract, payload, issues)
+    _check_repeat_bookmarks(contract, template_path, issues)
 
     occurrences = scan_template_placeholders(template_path)
     metrics = {

@@ -35,6 +35,7 @@ from docx.text.paragraph import Paragraph
 
 try:
     from .template_engine import (
+        bookmark_body_range as _bookmark_body_range,
         get_paragraph_text as _get_paragraph_text,
         overwrite_paragraph_text_preserve_run_style as _overwrite_paragraph_text_preserve_run_style,
         paragraph_has_drawing as _paragraph_has_drawing,
@@ -46,6 +47,7 @@ try:
     )
 except ImportError:  # pragma: no cover - script-style import
     from template_engine import (
+        bookmark_body_range as _bookmark_body_range,
         get_paragraph_text as _get_paragraph_text,
         overwrite_paragraph_text_preserve_run_style as _overwrite_paragraph_text_preserve_run_style,
         paragraph_has_drawing as _paragraph_has_drawing,
@@ -780,6 +782,85 @@ class TemplateRenderer:
         self._rebuild_anchors()
         return len(inserted)
 
+    @staticmethod
+    def _remove_bookmark_markers(element) -> None:
+        for tag in (qn("w:bookmarkStart"), qn("w:bookmarkEnd")):
+            for marker in list(element.iter(tag)):
+                parent = marker.getparent()
+                if parent is not None:
+                    parent.remove(marker)
+
+    @staticmethod
+    def _add_bookmark_boundaries(first, last, bookmark_name: str, bookmark_id: str) -> None:
+        start = OxmlElement("w:bookmarkStart")
+        start.set(qn("w:id"), bookmark_id)
+        start.set(qn("w:name"), bookmark_name)
+        insert_at = 1 if first.find(qn("w:pPr")) is not None else 0
+        first.insert(insert_at, start)
+
+        end = OxmlElement("w:bookmarkEnd")
+        end.set(qn("w:id"), bookmark_id)
+        last.append(end)
+
+    def _render_bookmarked_text_repeat(
+        self,
+        *,
+        token: str,
+        bookmark_name: str,
+        values: list[str],
+    ) -> list:
+        """Replace a bookmarked text prototype with one paragraph per value."""
+        start_idx, end_idx = _bookmark_body_range(self.body, bookmark_name)
+        children = list(self.body)
+        region = children[start_idx:end_idx + 1]
+        anchor = next(
+            (
+                element
+                for element in region
+                if element.tag == qn("w:p") and token in _get_paragraph_text(element)
+            ),
+            None,
+        )
+        prototypes = [
+            element
+            for element in region
+            if element.tag == qn("w:p")
+            and element is not anchor
+            and not _paragraph_has_drawing(element)
+            and _get_paragraph_text(element).strip()
+        ]
+        if anchor is None or not prototypes:
+            raise ValueError(f"Invalid repeat prototype: {token} / {bookmark_name}")
+
+        start_marker = next(
+            node
+            for node in anchor.iter(qn("w:bookmarkStart"))
+            if node.get(qn("w:name")) == bookmark_name
+        )
+        bookmark_id = start_marker.get(qn("w:id")) or "0"
+        prototype = prototypes[0]
+        insert_at = start_idx
+        for element in region:
+            self.body.remove(element)
+
+        rendered = []
+        for offset, value in enumerate(values):
+            clone = copy.deepcopy(prototype)
+            self._remove_bookmark_markers(clone)
+            _overwrite_paragraph_text_preserve_run_style(clone, str(value))
+            self.body.insert(insert_at + offset, clone)
+            rendered.append(clone)
+        if not rendered:
+            raise ValueError(f"Repeat payload must not be empty: {token}")
+        self._add_bookmark_boundaries(
+            rendered[0],
+            rendered[-1],
+            bookmark_name,
+            bookmark_id,
+        )
+        self._rebuild_anchors()
+        return rendered
+
     def replace_metadata(self):
         """Replace all metadata placeholders."""
         product = self.meta.get("product", "")
@@ -1420,59 +1501,22 @@ class TemplateRenderer:
         self._rebuild_anchors()
 
     def _replace_key_issue_section(self, key_issue_items: list[dict]):
-        start_idx = self._find_exact_paragraph_index("5.1问卷重点问题分析")
-        end_idx = self._find_exact_paragraph_index("5.2调研结果总结", start=(start_idx + 1) if start_idx is not None else 0)
-        if start_idx is None or end_idx is None or end_idx <= start_idx:
-            return
-
-        text_paragraphs = []
-        for i in range(start_idx + 1, end_idx):
-            info = self.anchors.get(i)
-            if not info or info["type"] != "p":
-                continue
-            paragraph = info["elem"]
-            if _paragraph_has_drawing(paragraph):
-                continue
-            text_paragraphs.append(paragraph)
-
         replacement_paragraphs = [item.get("paragraph", "") for item in key_issue_items]
-
-        insert_before = self._get_paragraph_at(end_idx)
-        for pi, text in enumerate(replacement_paragraphs):
-            if pi < len(text_paragraphs):
-                _set_paragraph_text(text_paragraphs[pi], text)
-                _set_paragraph_style_props(
-                    text_paragraphs[pi],
-                    "宋体",
-                    12,
-                    False,
-                    "both",
-                    body_layout=True,
-                    first_line_chars=200,
-                )
-            else:
-                new_p = OxmlElement("w:p")
-                new_r = OxmlElement("w:r")
-                new_t = OxmlElement("w:t")
-                new_t.set(qn("xml:space"), "preserve")
-                new_t.text = text
-                new_r.append(new_t)
-                new_p.append(new_r)
-                insert_before.addprevious(new_p)
-                _set_paragraph_style_props(
-                    new_p,
-                    "宋体",
-                    12,
-                    False,
-                    "both",
-                    body_layout=True,
-                    first_line_chars=200,
-                )
-
-        for extra in text_paragraphs[len(replacement_paragraphs):]:
-            extra.getparent().remove(extra)
-
-        self._rebuild_anchors()
+        rendered = self._render_bookmarked_text_repeat(
+            token="{{repeat.key_issue_items}}",
+            bookmark_name="tpl_key_issue_items",
+            values=replacement_paragraphs,
+        )
+        for paragraph in rendered:
+            _set_paragraph_style_props(
+                paragraph,
+                "宋体",
+                12,
+                False,
+                "both",
+                body_layout=True,
+                first_line_chars=200,
+            )
 
     def _replace_section_body_by_heading(
         self,
@@ -1546,63 +1590,92 @@ class TemplateRenderer:
                 paragraph.getparent().remove(paragraph)
 
     def replace_attachments(self):
-        """Replace attachment 1 with actual question list."""
+        """Render attachment 1 from its bookmarked question prototype."""
         attachments = self.payload.get("attachments", {})
         questions = attachments.get("attachment1_questions", [])
         if not questions:
             return
 
-        idx = self._find_anchor_index("附件1")
-        if idx is None:
-            return
-
         att_name = attachments.get("attachment1_name", "")
         if att_name:
+            idx = self._find_anchor_index("附件1")
+            if idx is None:
+                raise ValueError("Missing attachment 1 heading")
             p = self._get_paragraph_at(idx)
             _set_paragraph_text(p, f"附件1：{att_name}")
             _set_paragraph_style_props(p, "宋体", 22, True, "left")
 
-        attachment2_idx = self._find_anchor_index("附件2", start=idx + 1)
-        if attachment2_idx is None:
-            return
+        start_idx, end_idx = _bookmark_body_range(
+            self.body,
+            "tpl_attachment_questions",
+        )
+        children = list(self.body)
+        region = children[start_idx:end_idx + 1]
+        anchor = next(
+            (
+                element
+                for element in region
+                if element.tag == qn("w:p")
+                and "{{repeat.attachment_questions}}" in _get_paragraph_text(element)
+            ),
+            None,
+        )
+        prototypes = [
+            element
+            for element in region
+            if element.tag == qn("w:p")
+            and element is not anchor
+            and _get_paragraph_text(element).strip()
+        ]
+        if anchor is None or len(prototypes) < 2:
+            raise ValueError("Invalid attachment question repeat prototype")
 
-        desired: list[str] = []
+        start_marker = next(
+            node
+            for node in anchor.iter(qn("w:bookmarkStart"))
+            if node.get(qn("w:name")) == "tpl_attachment_questions"
+        )
+        bookmark_id = start_marker.get(qn("w:id")) or "0"
+        question_prototype, option_prototype = prototypes[:2]
+        for element in region:
+            self.body.remove(element)
+
+        rendered = []
+        insert_at = start_idx
         for display_index, question in enumerate(questions, start=1):
-            question_text = re.sub(r"^\s*\d+\s*[\.．、]\s*", "", str(question.get("question", "")).strip())
-            desired.append(f"（{display_index}） {question_text}")
+            question_text = re.sub(
+                r"^\s*\d+\s*[\.．、]\s*",
+                "",
+                str(question.get("question", "")).strip(),
+            )
+            question_paragraph = copy.deepcopy(question_prototype)
+            self._remove_bookmark_markers(question_paragraph)
+            _overwrite_paragraph_text_preserve_run_style(
+                question_paragraph,
+                f"（{display_index}） {question_text}",
+            )
+            self.body.insert(insert_at + len(rendered), question_paragraph)
+            rendered.append(question_paragraph)
             for option in question.get("options", []):
-                desired.append(f"{option.get('code', '')}. {option.get('text', '')}")
+                option_paragraph = copy.deepcopy(option_prototype)
+                self._remove_bookmark_markers(option_paragraph)
+                _overwrite_paragraph_text_preserve_run_style(
+                    option_paragraph,
+                    f"{option.get('code', '')}. {option.get('text', '')}",
+                )
+                self.body.insert(insert_at + len(rendered), option_paragraph)
+                rendered.append(option_paragraph)
 
-        target_paragraphs = []
-        for i in range(idx + 1, attachment2_idx):
-            info = self.anchors.get(i)
-            if not info or info["type"] != "p":
-                continue
-            paragraph = info["elem"]
-            if _paragraph_has_drawing(paragraph):
-                continue
-            if _get_paragraph_text(paragraph).strip():
-                target_paragraphs.append(paragraph)
-
-        if not target_paragraphs:
-            return
-
-        insert_before = self.anchors[attachment2_idx]["elem"]
-        template_paragraph = target_paragraphs[-1]
-        while len(target_paragraphs) < len(desired):
-            cloned = copy.deepcopy(template_paragraph)
-            insert_before.addprevious(cloned)
-            target_paragraphs.append(cloned)
-
-        for index, paragraph in enumerate(target_paragraphs):
-            if index < len(desired):
-                _set_paragraph_text(paragraph, desired[index])
-                _set_paragraph_style_props(paragraph, "宋体", 12, False)
-            else:
-                parent = paragraph.getparent()
-                if parent is not None:
-                    parent.remove(paragraph)
-
+        if not rendered:
+            raise ValueError("Attachment question repeat payload must not be empty")
+        self._add_bookmark_boundaries(
+            rendered[0],
+            rendered[-1],
+            "tpl_attachment_questions",
+            bookmark_id,
+        )
+        for paragraph in rendered:
+            _set_paragraph_style_props(paragraph, "宋体", 12, False)
         self._rebuild_anchors()
 
     def replace_disclaimer(self):
@@ -1992,12 +2065,36 @@ class TemplateRenderer:
                 return "".join(node.text or "" for node in element.findall(f".//{{{NS['w']}}}t")).strip()
 
             children = list(body)
-            start_idx = next((idx for idx, child in enumerate(children) if child.tag == qn("w:p") and paragraph_text(child) == "5.1问卷重点问题分析"), None)
-            end_idx = next((idx for idx, child in enumerate(children) if child.tag == qn("w:p") and paragraph_text(child) == "5.2调研结果总结"), None)
-            if start_idx is None or end_idx is None or end_idx <= start_idx:
+            bookmark_start = next(
+                (
+                    node
+                    for node in document_root.iter(qn("w:bookmarkStart"))
+                    if node.get(qn("w:name")) == "tpl_key_issue_items"
+                ),
+                None,
+            )
+            if bookmark_start is None:
+                return
+            bookmark_id = bookmark_start.get(qn("w:id"))
+
+            def child_index_containing(tag: str, predicate) -> Optional[int]:
+                for child_index, child in enumerate(children):
+                    if any(predicate(node) for node in child.iter(tag)):
+                        return child_index
+                return None
+
+            start_idx = child_index_containing(
+                qn("w:bookmarkStart"),
+                lambda node: node.get(qn("w:name")) == "tpl_key_issue_items",
+            )
+            end_idx = child_index_containing(
+                qn("w:bookmarkEnd"),
+                lambda node: node.get(qn("w:id")) == bookmark_id,
+            )
+            if start_idx is None or end_idx is None or end_idx < start_idx:
                 return
 
-            for child in children[start_idx + 1:end_idx]:
+            for child in children[start_idx:end_idx + 1]:
                 if child.findall(f".//{{{NS['c']}}}chart"):
                     body.remove(child)
 
@@ -2034,7 +2131,7 @@ class TemplateRenderer:
             # Interleave charts after text paragraphs (not batch before first paragraph)
             text_paras = []
             for idx, child in enumerate(list(body)):
-                if start_idx < idx < end_idx:
+                if start_idx <= idx <= end_idx:
                     if child.tag == qn("w:p") and paragraph_text(child) and not child.findall(f".//{{{NS['c']}}}chart"):
                         text_paras.append(child)
 
@@ -2045,10 +2142,7 @@ class TemplateRenderer:
                     ref_idx = current_children.index(text_paras[i])
                     body.insert(ref_idx + 1, chart_elem)
                 else:
-                    current_children = list(body)
-                    end_idx_current = next((idx for idx, child in enumerate(current_children) if child.tag == qn("w:p") and paragraph_text(child) == "5.2调研结果总结"), None)
-                    if end_idx_current is not None:
-                        body.insert(end_idx_current, chart_elem)
+                    body.insert(list(body).index(text_paras[-1]) + 1, chart_elem)
 
             content_root = ET.fromstring(zin.read("[Content_Types].xml"))
             existing_overrides = {

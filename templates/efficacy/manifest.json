@@ -19,6 +19,8 @@
     "questionnaire_note.closing",
     "summary.overall_analysis",
     "summary.recommendations",
+    "summary.key_issue_items",
+    "attachments.attachment1_questions",
     "disclaimer.items"
   ],
   "required_singletons": [
@@ -28,7 +30,9 @@
     "{{block.questionnaire_note}}",
     "{{block.summary.overall_analysis}}",
     "{{block.summary.recommendations}}",
-    "{{block.disclaimer.items}}"
+    "{{block.disclaimer.items}}",
+    "{{repeat.key_issue_items}}",
+    "{{repeat.attachment_questions}}"
   ],
   "optional_singletons": [],
   "field_placeholders": [
@@ -39,6 +43,10 @@
     "{{field.service.unit}}",
     "{{field.service.date}}"
   ],
+  "repeat_bookmarks": {
+    "{{repeat.key_issue_items}}": "tpl_key_issue_items",
+    "{{repeat.attachment_questions}}": "tpl_attachment_questions"
+  },
   "allowed_chart_modes": {
     "result_overview_charts": ["image"],
     "key_issue_charts": ["office"]

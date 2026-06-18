@@ -2333,14 +2333,16 @@ class TemplatePreflightTest(unittest.TestCase):
             "summary": {
                 "overall_analysis": ["overall"],
                 "recommendations": ["recommendation"],
+                "key_issue_items": [{"paragraph": "key issue"}],
             },
+            "attachments": {"attachment1_questions": [{"question": "q"}]},
             "disclaimer": {"items": ["item"]},
         }
         result = preflight_template(contract, payload, mode="warning")
         # The bundled template contains Task 5 fields plus Task 6 block
         # singletons and must preflight clean for a complete minimal payload.
         self.assertEqual(result["status"], "ok", msg=result)
-        self.assertEqual(result["metrics"]["distinct_placeholders"], 13)
+        self.assertEqual(result["metrics"]["distinct_placeholders"], 15)
 
 
 class TemplateEngineTest(unittest.TestCase):
@@ -2495,6 +2497,21 @@ class TemplateEngineTest(unittest.TestCase):
         replace_text_across_runs(p, "{{field.meta.survey_period}}", "2025年11月1日-11月30日")
         self.assertEqual(self._text_of(p), "调研时间：2025年11月1日-11月30日")
 
+    def test_bookmark_body_range_finds_multi_paragraph_boundary(self) -> None:
+        from lxml import etree
+        from scripts.template_engine import bookmark_body_range
+
+        xml = (
+            f"<w:document xmlns:w='{self.W}'><w:body>"
+            "<w:p><w:bookmarkStart w:id='41' w:name='tpl_items'/><w:r><w:t>start</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>middle</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>end</w:t></w:r><w:bookmarkEnd w:id='41'/></w:p>"
+            "</w:body></w:document>"
+        )
+        root = etree.fromstring(xml.encode("utf-8"))
+        body = root.find(f"{{{self.W}}}body")
+        self.assertEqual(bookmark_body_range(body, "tpl_items"), (0, 2))
+
 
 class FieldPlaceholderTemplateTest(unittest.TestCase):
     """Cover Task 5: the bundled docx now carries six {{field.*}} placeholders.
@@ -2630,6 +2647,59 @@ class BlockPlaceholderTemplateTest(unittest.TestCase):
             self.assertEqual(texts[:4], ["第一段", "第二段", "第三段", "after"])
             first_run = renderer.body[0].find(qn("w:r"))
             self.assertIsNotNone(first_run.find(qn("w:rPr") + "/" + qn("w:b")))
+
+
+class RepeatPlaceholderTemplateTest(unittest.TestCase):
+    """Cover Task 7: attachment and 5.1 repeats have explicit bookmarks."""
+
+    EXPECTED = {
+        "{{repeat.key_issue_items}}": "tpl_key_issue_items",
+        "{{repeat.attachment_questions}}": "tpl_attachment_questions",
+    }
+
+    def test_bundled_template_contains_repeat_tokens_and_bookmarks(self) -> None:
+        from zipfile import ZipFile
+        from lxml import etree
+        from docx.oxml.ns import qn
+        from scripts.template_preflight import scan_template_placeholders
+
+        template_path = ROOT / "templates" / "efficacy-report-template.docx"
+        occurrences = scan_template_placeholders(template_path)
+        with ZipFile(template_path) as zipped:
+            root = etree.fromstring(zipped.read("word/document.xml"))
+        bookmark_names = {
+            node.get(qn("w:name"))
+            for node in root.findall(".//" + qn("w:bookmarkStart"))
+        }
+        for token, bookmark in self.EXPECTED.items():
+            with self.subTest(token=token):
+                self.assertEqual(len(occurrences.get(token, [])), 1)
+                self.assertIn(bookmark, bookmark_names)
+
+    def test_preflight_rejects_missing_repeat_bookmark(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        helper = TemplatePreflightTest()
+        with tempfile.TemporaryDirectory() as tmp:
+            body = "<w:p><w:r><w:t>{{repeat.items}}</w:t></w:r></w:p>"
+            manifest_path, _ = helper._make_manifest_with_template(
+                Path(tmp),
+                body,
+                manifest_overrides={
+                    "required_payload_paths": [],
+                    "required_singletons": ["{{repeat.items}}"],
+                    "repeat_bookmarks": {
+                        "{{repeat.items}}": "tpl_items",
+                    },
+                },
+            )
+            contract = load_manifest(manifest_path)
+            result = preflight_template(contract, {}, mode="warning")
+            self.assertIn(
+                "MISSING_BLOCK_BOUNDARY",
+                {error["code"] for error in result["errors"]},
+            )
 
 
 if __name__ == "__main__":

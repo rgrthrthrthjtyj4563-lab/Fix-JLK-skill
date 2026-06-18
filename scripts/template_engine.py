@@ -27,6 +27,51 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 
+def bookmark_body_range(body, bookmark_name: str) -> tuple[int, int]:
+    """Return inclusive top-level body indices for a named Word bookmark.
+
+    Word stores bookmark start/end markers inside paragraphs. This helper
+    resolves the matching bookmark id, walks each marker up to its direct body
+    child, and rejects missing, reversed, or detached boundaries.
+    """
+    start = next(
+        (
+            node
+            for node in body.iter(qn("w:bookmarkStart"))
+            if node.get(qn("w:name")) == bookmark_name
+        ),
+        None,
+    )
+    if start is None:
+        raise ValueError(f"Missing bookmark start: {bookmark_name}")
+    bookmark_id = start.get(qn("w:id"))
+    end = next(
+        (
+            node
+            for node in body.iter(qn("w:bookmarkEnd"))
+            if node.get(qn("w:id")) == bookmark_id
+        ),
+        None,
+    )
+    if end is None:
+        raise ValueError(f"Missing bookmark end: {bookmark_name}")
+
+    def top_level(node):
+        current = node
+        while current.getparent() is not body:
+            current = current.getparent()
+            if current is None:
+                raise ValueError(f"Detached bookmark boundary: {bookmark_name}")
+        return current
+
+    children = list(body)
+    start_index = children.index(top_level(start))
+    end_index = children.index(top_level(end))
+    if end_index < start_index:
+        raise ValueError(f"Reversed bookmark boundary: {bookmark_name}")
+    return start_index, end_index
+
+
 def get_paragraph_text(p_element) -> str:
     """Extract concatenated plain text from a ``w:p`` element."""
     texts: list[str] = []

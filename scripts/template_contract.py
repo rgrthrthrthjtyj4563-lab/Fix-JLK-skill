@@ -73,6 +73,8 @@ class TemplateContract:
     # template. Used to whitelist legitimate repeat occurrences such as
     # ``{{field.service.unit}}`` on the cover and settlement pages.
     field_placeholders: tuple[str, ...] = ()
+    # Mapping from repeat placeholder token to its Word bookmark name.
+    repeat_bookmarks: dict[str, str] = field(default_factory=dict)
     allowed_chart_modes: dict[str, tuple[str, ...]] = field(default_factory=dict)
     manifest_path: Path = field(default_factory=lambda: Path("."))
 
@@ -114,6 +116,21 @@ def _ensure_chart_modes(value: Any, manifest_path: Path) -> dict[str, tuple[str,
             )
         result[key] = tuple(modes)
     return result
+
+
+def _ensure_str_mapping(value: Any, field_name: str, manifest_path: Path) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or not all(
+        isinstance(key, str) and isinstance(item, str) and key and item
+        for key, item in value.items()
+    ):
+        raise ContractError(
+            "INVALID_MANIFEST",
+            f"{field_name} must be an object of non-empty string pairs",
+            manifest_path=manifest_path,
+        )
+    return dict(value)
 
 
 def _resolve_template_path(manifest_path: Path, template_file: str) -> Path:
@@ -237,6 +254,9 @@ def load_manifest(manifest_path: Path) -> TemplateContract:
     field_placeholders = _ensure_str_list(
         raw.get("field_placeholders"), "field_placeholders", manifest_path
     )
+    repeat_bookmarks = _ensure_str_mapping(
+        raw.get("repeat_bookmarks"), "repeat_bookmarks", manifest_path
+    )
 
     overlap = set(required_singletons) & set(optional_singletons)
     if overlap:
@@ -260,6 +280,7 @@ def load_manifest(manifest_path: Path) -> TemplateContract:
         required_singletons=required_singletons,
         optional_singletons=optional_singletons,
         field_placeholders=field_placeholders,
+        repeat_bookmarks=repeat_bookmarks,
         allowed_chart_modes=allowed_chart_modes,
         manifest_path=manifest_path.resolve(),
     )
