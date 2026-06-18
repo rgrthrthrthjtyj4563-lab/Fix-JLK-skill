@@ -1835,5 +1835,118 @@ class PipelineTest(unittest.TestCase):
                 _validate_51_text_chart_order(wrong_order_docx, payload)
 
 
+class PipelineEntrypointTest(unittest.TestCase):
+    """Cover Task 1 plumbing: phase timer + fail-fast final validation.
+
+    These tests exercise the two small primitives extracted from
+    ``run_report_pipeline.main`` rather than re-running the full pipeline,
+    which would be expensive and largely re-test other modules.
+    """
+
+    def test_phase_names_match_documented_order(self) -> None:
+        from scripts.run_report_pipeline import PHASE_NAMES
+
+        # The skill spec (Task 1) requires this exact ordered set so that
+        # downstream perf tooling can rely on a stable schema.
+        self.assertEqual(
+            PHASE_NAMES,
+            (
+                "parse_questionnaire",
+                "preflight_content",
+                "build_payload",
+                "template_preflight",
+                "render_docx",
+                "final_validate_docx",
+                "total",
+            ),
+        )
+
+    def test_phase_timer_records_each_phase_independently(self) -> None:
+        from scripts.run_report_pipeline import PhaseTimer
+
+        timer = PhaseTimer()
+        with timer.phase("parse_questionnaire"):
+            pass
+        with timer.phase("render_docx"):
+            pass
+        timings = timer.as_dict()
+        self.assertIn("parse_questionnaire", timings)
+        self.assertIn("render_docx", timings)
+        for value in timings.values():
+            self.assertIsInstance(value, float)
+            self.assertGreaterEqual(value, 0.0)
+
+    def test_phase_timer_rejects_unknown_phase_name(self) -> None:
+        from scripts.run_report_pipeline import PhaseTimer
+
+        timer = PhaseTimer()
+        with self.assertRaises(ValueError):
+            with timer.phase("not_a_phase"):
+                pass
+
+    def test_finalize_with_validation_passthrough_on_success(self) -> None:
+        from scripts.run_report_pipeline import finalize_with_validation
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            output_docx = run_dir / "report.docx"
+            output_docx.write_bytes(b"fake docx bytes")
+
+            calls: list[tuple[Path, dict]] = []
+
+            def fake_validate(path: Path, payload: dict) -> None:
+                calls.append((path, payload))
+
+            from scripts import run_report_pipeline as pipeline
+
+            original = pipeline.validate_docx
+            pipeline.validate_docx = fake_validate  # type: ignore[assignment]
+            try:
+                finalize_with_validation(output_docx, {"meta": {}}, run_dir)
+            finally:
+                pipeline.validate_docx = original  # type: ignore[assignment]
+
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(output_docx.exists(), "successful validation must keep the docx")
+            self.assertFalse((run_dir / "final_validation_error.json").exists())
+
+    def test_finalize_with_validation_removes_docx_on_failure(self) -> None:
+        from scripts.run_report_pipeline import (
+            finalize_with_validation,
+            PipelineFinalValidationError,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            output_docx = run_dir / "report.docx"
+            output_docx.write_bytes(b"fake docx bytes")
+
+            def boom(path: Path, payload: dict) -> None:
+                raise FinalValidationError("synthetic validation failure")
+
+            from scripts import run_report_pipeline as pipeline
+
+            original = pipeline.validate_docx
+            pipeline.validate_docx = boom  # type: ignore[assignment]
+            try:
+                with self.assertRaises(PipelineFinalValidationError) as ctx:
+                    finalize_with_validation(output_docx, {"meta": {}}, run_dir)
+            finally:
+                pipeline.validate_docx = original  # type: ignore[assignment]
+
+            self.assertEqual(ctx.exception.run_dir, run_dir)
+            self.assertIn("synthetic validation failure", str(ctx.exception))
+            self.assertFalse(
+                output_docx.exists(),
+                "fail-fast must remove the docx so it is not delivered",
+            )
+
+            error_path = run_dir / "final_validation_error.json"
+            self.assertTrue(error_path.exists())
+            payload = json.loads(error_path.read_text(encoding="utf-8"))
+            self.assertIn("synthetic validation failure", payload["error"])
+            self.assertEqual(Path(payload["run_dir"]).resolve(), run_dir.resolve())
+
+
 if __name__ == "__main__":
     unittest.main()

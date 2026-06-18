@@ -6,8 +6,11 @@ import hashlib
 import json
 import re
 import sys
+import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Iterator
 
 try:
     from .build_payload import build_payload, parse_markdown_content, validate_payload, PreflightError, preflight_report_content, load_dimension_library
@@ -22,6 +25,65 @@ except ImportError:
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+# Ordered phase names recorded in run_manifest.json/timings.json. Keep stable so
+# downstream perf comparisons can read them by key.
+PHASE_NAMES = (
+    "parse_questionnaire",
+    "preflight_content",
+    "build_payload",
+    "template_preflight",
+    "render_docx",
+    "final_validate_docx",
+    "total",
+)
+
+
+class PipelineFinalValidationError(RuntimeError):
+    """Raised when the rendered docx fails final validation.
+
+    Unlike the previous warning-only behaviour, this error indicates that the
+    final docx has been removed and must NOT be delivered. The run directory is
+    retained on disk so the caller can inspect ``final_validation_error.json``
+    and the partially-built artifacts.
+    """
+
+    def __init__(self, message: str, run_dir: Path) -> None:
+        super().__init__(message)
+        self.run_dir = run_dir
+
+
+class PhaseTimer:
+    """Collect elapsed wall-clock seconds per pipeline phase.
+
+    Usage::
+
+        timer = PhaseTimer()
+        with timer.phase("render_docx"):
+            ...
+        timer.record_total(start)
+        timer.as_dict()  # {phase: seconds, ...}
+    """
+
+    def __init__(self) -> None:
+        self._timings: dict[str, float] = {}
+
+    @contextmanager
+    def phase(self, name: str) -> Iterator[None]:
+        if name not in PHASE_NAMES:
+            raise ValueError(f"unknown phase name: {name}")
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._timings[name] = round(time.perf_counter() - start, 6)
+
+    def record_total(self, start: float) -> None:
+        self._timings["total"] = round(time.perf_counter() - start, 6)
+
+    def as_dict(self) -> dict[str, float]:
+        return dict(self._timings)
 
 
 def slugify(text: str) -> str:
@@ -56,6 +118,40 @@ def file_info(path: Path) -> dict:
     }
 
 
+def finalize_with_validation(output_docx: Path, payload: dict, run_dir: Path) -> None:
+    """Run final validation and enforce fail-fast removal of the output docx.
+
+    On validation failure this function:
+      * deletes ``output_docx`` so it cannot be mistaken for a deliverable,
+      * writes ``run_dir/final_validation_error.json`` with the error message,
+      * raises :class:`PipelineFinalValidationError`.
+
+    On success the docx is left in place and no error file is written.
+    """
+    try:
+        validate_docx(output_docx, payload)
+    except FinalValidationError as exc:
+        message = str(exc)
+        error_path = run_dir / "final_validation_error.json"
+        error_path.write_text(
+            json.dumps(
+                {
+                    "error": message,
+                    "output_docx": str(output_docx.resolve()),
+                    "run_dir": str(run_dir.resolve()),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        try:
+            output_docx.unlink()
+        except FileNotFoundError:
+            pass
+        raise PipelineFinalValidationError(message, run_dir) from exc
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the patient report pipeline in an isolated per-run directory.")
     parser.add_argument("questionnaire_xlsx")
@@ -77,42 +173,55 @@ def main() -> None:
     run_dir = Path(args.run_dir) if args.run_dir else default_run_dir(questionnaire_path, report_content_path)
     run_dir.mkdir(parents=True, exist_ok=False)
 
-    questionnaire = parse_sheet(questionnaire_path)
-    questionnaire_json = run_dir / "questionnaire.json"
-    questionnaire_json.write_text(json.dumps(questionnaire, ensure_ascii=False, indent=2), encoding="utf-8")
+    timer = PhaseTimer()
+    total_start = time.perf_counter()
+
+    with timer.phase("parse_questionnaire"):
+        questionnaire = parse_sheet(questionnaire_path)
+        questionnaire_json = run_dir / "questionnaire.json"
+        questionnaire_json.write_text(json.dumps(questionnaire, ensure_ascii=False, indent=2), encoding="utf-8")
 
     meta, content = parse_markdown_content(report_content_path)
 
     # ── Preflight: validate draft completeness before expensive build ──
-    library = load_dimension_library()
-    try:
-        preflight_result = preflight_report_content(
-            meta, content,
-            library=library,
-            questionnaire=questionnaire,
-        )
-    except PreflightError as exc:
-        print(str(exc), file=sys.stderr)
-        print(f"Run directory retained for diagnosis: {run_dir.resolve()}", file=sys.stderr)
-        # Save preflight results for debugging
+    with timer.phase("preflight_content"):
+        library = load_dimension_library()
+        try:
+            preflight_result = preflight_report_content(
+                meta, content,
+                library=library,
+                questionnaire=questionnaire,
+            )
+        except PreflightError as exc:
+            print(str(exc), file=sys.stderr)
+            print(f"Run directory retained for diagnosis: {run_dir.resolve()}", file=sys.stderr)
+            preflight_json = run_dir / "preflight.json"
+            preflight_json.write_text(json.dumps(exc.result, ensure_ascii=False, indent=2), encoding="utf-8")
+            sys.exit(1)
+
         preflight_json = run_dir / "preflight.json"
-        preflight_json.write_text(json.dumps(exc.result, ensure_ascii=False, indent=2), encoding="utf-8")
-        sys.exit(1)
+        preflight_json.write_text(json.dumps(preflight_result, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # Save preflight success alongside other artifacts
-    preflight_json = run_dir / "preflight.json"
-    preflight_json.write_text(json.dumps(preflight_result, ensure_ascii=False, indent=2), encoding="utf-8")
+    with timer.phase("build_payload"):
+        payload = build_payload(questionnaire, meta, content, args)
+        validate_payload(payload)
 
-    payload = build_payload(questionnaire, meta, content, args)
-    validate_payload(payload)
+        payload_json = run_dir / "report_payload.json"
+        payload_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    payload_json = run_dir / "report_payload.json"
-    payload_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # template_preflight is recorded as a phase even when no work is done yet,
+    # so downstream perf tooling sees a stable schema. The actual preflight
+    # logic is added in a later task (see Task 3).
+    with timer.phase("template_preflight"):
+        pass
 
     output_docx = Path(args.output_docx) if args.output_docx else run_dir / "report.docx"
     output_docx.parent.mkdir(parents=True, exist_ok=True)
-    TemplateRenderer(Path(payload["meta"]["template_doc"]), payload).render(output_docx)
 
+    with timer.phase("render_docx"):
+        TemplateRenderer(Path(payload["meta"]["template_doc"]), payload).render(output_docx)
+
+    timings_partial = timer.as_dict()
     manifest = {
         "skill_root": str(ROOT.resolve()),
         "run_dir": str(run_dir.resolve()),
@@ -132,16 +241,34 @@ def main() -> None:
             "payload_json": file_info(payload_json),
             "output_docx": str(output_docx.resolve()),
         },
+        # Timings recorded so far. The final_validate_docx phase is appended
+        # after validation completes so that callers can distinguish
+        # render-only vs. render+validate cost.
+        "timings_seconds": timings_partial,
     }
     manifest_json = run_dir / "run_manifest.json"
     manifest_json.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     try:
-        validate_docx(output_docx, payload)
-    except FinalValidationError as exc:
-        print(f"FINAL_VALIDATION_WARNING: {exc}", file=sys.stderr)
+        with timer.phase("final_validate_docx"):
+            finalize_with_validation(output_docx, payload, run_dir)
+    except PipelineFinalValidationError as exc:
+        timer.record_total(total_start)
+        manifest["timings_seconds"] = timer.as_dict()
+        manifest_json.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        (run_dir / "timings.json").write_text(
+            json.dumps(timer.as_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"FINAL_VALIDATION_ERROR: {exc}", file=sys.stderr)
         print(f"Run diagnostics retained at: {run_dir.resolve()}", file=sys.stderr)
-        # Keep output for debugging
+        sys.exit(2)
+
+    timer.record_total(total_start)
+    manifest["timings_seconds"] = timer.as_dict()
+    manifest_json.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    (run_dir / "timings.json").write_text(
+        json.dumps(timer.as_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     print(output_docx.resolve())
 
