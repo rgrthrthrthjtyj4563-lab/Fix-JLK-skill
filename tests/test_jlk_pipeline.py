@@ -1948,5 +1948,130 @@ class PipelineEntrypointTest(unittest.TestCase):
             self.assertEqual(Path(payload["run_dir"]).resolve(), run_dir.resolve())
 
 
+class TemplateContractTest(unittest.TestCase):
+    """Cover Task 2: scripts/template_contract.py manifest loader."""
+
+    def _write(self, root: Path, name: str, body: dict) -> Path:
+        manifest_dir = root / name
+        manifest_dir.mkdir(parents=True)
+        # Drop a fake docx alongside so template_file resolves successfully.
+        (manifest_dir / "template.docx").write_bytes(b"fake docx")
+        manifest_path = manifest_dir / "manifest.json"
+        manifest_path.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+        return manifest_path
+
+    def _valid_body(self) -> dict:
+        return {
+            "schema_version": 1,
+            "template_id": "test-v1",
+            "template_type": "patient-questionnaire-report",
+            "template_file": "template.docx",
+            "renderer": "scripts.render_from_template:TemplateRenderer",
+            "required_payload_paths": ["meta.product"],
+            "required_singletons": ["field.meta.product"],
+            "optional_singletons": ["block.preface"],
+            "allowed_chart_modes": {"result_overview_charts": ["image"]},
+        }
+
+    def test_loads_bundled_efficacy_manifest(self) -> None:
+        from scripts.template_contract import load_manifest
+
+        manifest_path = ROOT / "templates" / "efficacy" / "manifest.json"
+        contract = load_manifest(manifest_path)
+        self.assertEqual(contract.schema_version, 1)
+        self.assertEqual(contract.template_id, "efficacy-v1")
+        self.assertEqual(contract.template_type, "patient-questionnaire-report")
+        # template_file points at templates/efficacy-report-template.docx
+        self.assertEqual(
+            contract.template_path,
+            (ROOT / "templates" / "efficacy-report-template.docx").resolve(),
+        )
+        self.assertIn("meta.product", contract.required_payload_paths)
+        self.assertEqual(
+            contract.allowed_chart_modes["result_overview_charts"], ("image",)
+        )
+        self.assertEqual(
+            contract.allowed_chart_modes["key_issue_charts"], ("office",)
+        )
+
+    def test_rejects_missing_required_field(self) -> None:
+        from scripts.template_contract import load_manifest, ContractError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = self._valid_body()
+            del body["renderer"]
+            manifest_path = self._write(Path(tmp), "broken", body)
+            with self.assertRaises(ContractError) as ctx:
+                load_manifest(manifest_path)
+            self.assertEqual(ctx.exception.code, "INVALID_MANIFEST")
+            self.assertIn("renderer", str(ctx.exception))
+
+    def test_rejects_unsupported_schema_version(self) -> None:
+        from scripts.template_contract import load_manifest, ContractError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = self._valid_body()
+            body["schema_version"] = 99
+            manifest_path = self._write(Path(tmp), "future", body)
+            with self.assertRaises(ContractError) as ctx:
+                load_manifest(manifest_path)
+            self.assertEqual(ctx.exception.code, "UNSUPPORTED_SCHEMA_VERSION")
+
+    def test_rejects_unknown_template_type(self) -> None:
+        from scripts.template_contract import load_manifest, ContractError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = self._valid_body()
+            body["template_type"] = "marketing-flyer"
+            manifest_path = self._write(Path(tmp), "wrong-type", body)
+            with self.assertRaises(ContractError) as ctx:
+                load_manifest(manifest_path)
+            self.assertEqual(ctx.exception.code, "INVALID_TEMPLATE_TYPE")
+
+    def test_rejects_missing_template_file(self) -> None:
+        from scripts.template_contract import load_manifest, ContractError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = self._valid_body()
+            body["template_file"] = "does-not-exist.docx"
+            # write manifest manually so we don't drop a template.docx.
+            manifest_dir = Path(tmp) / "missing"
+            manifest_dir.mkdir()
+            manifest_path = manifest_dir / "manifest.json"
+            manifest_path.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaises(ContractError) as ctx:
+                load_manifest(manifest_path)
+            self.assertEqual(ctx.exception.code, "TEMPLATE_NOT_FOUND")
+
+    def test_rejects_path_escape(self) -> None:
+        from scripts.template_contract import load_manifest, ContractError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            templates_root = Path(tmp) / "templates"
+            templates_root.mkdir()
+            manifest_dir = templates_root / "evil"
+            manifest_dir.mkdir()
+            manifest_path = manifest_dir / "manifest.json"
+            body = self._valid_body()
+            body["template_file"] = "../../etc/passwd"
+            manifest_path.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaises(ContractError) as ctx:
+                load_manifest(manifest_path)
+            self.assertEqual(ctx.exception.code, "PATH_ESCAPE")
+
+    def test_rejects_singleton_overlap(self) -> None:
+        from scripts.template_contract import load_manifest, ContractError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = self._valid_body()
+            body["required_singletons"] = ["field.meta.product"]
+            body["optional_singletons"] = ["field.meta.product"]
+            manifest_path = self._write(Path(tmp), "overlap", body)
+            with self.assertRaises(ContractError) as ctx:
+                load_manifest(manifest_path)
+            self.assertEqual(ctx.exception.code, "INVALID_MANIFEST")
+            self.assertIn("both required and optional", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

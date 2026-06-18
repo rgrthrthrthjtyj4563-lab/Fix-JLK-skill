@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "template_id": "efficacy-v1",
+  "template_type": "patient-questionnaire-report",
+  "template_file": "../efficacy-report-template.docx",
+  "renderer": "scripts.render_from_template:TemplateRenderer",
+  "description": "Patient questionnaire report bundled template. Used for both efficacy and adherence themes; the dynamic result-section block is cloned per payload.result_sections length so theme-specific section counts adapt without a separate template.",
+  "required_payload_paths": [
+    "meta.product",
+    "meta.region",
+    "meta.template_doc",
+    "result_sections"
+  ],
+  "required_singletons": [],
+  "optional_singletons": [],
+  "allowed_chart_modes": {
+    "result_overview_charts": ["image"],
+    "key_issue_charts": ["office"]
+  },
+  "notes": [
+    "required_singletons / optional_singletons are populated incrementally as Tasks 5-8 inject {{field.*}}, {{block.*}}, {{repeat.*}} and {{media.*}} placeholders into the template.",
+    "allowed_chart_modes captures the locked-in answer to spec Q3: chapter-4 result-overview charts are PNG drawings (two), section 5.1 key-issue charts are native Office 3D pie drawings (two)."
+  ]
+}
