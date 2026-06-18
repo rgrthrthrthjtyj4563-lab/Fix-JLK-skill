@@ -1044,14 +1044,6 @@ class TemplateRenderer:
         def paragraph_has_visible_text(element) -> bool:
             return local_tag(element) == "p" and bool(_get_paragraph_text(element).strip())
 
-        def collect_children():
-            collected = []
-            for child in self.body:
-                if local_tag(child) == "sectPr":
-                    break
-                collected.append(child)
-            return collected
-
         def build_units(section_elements):
             heading_positions = [
                 idx for idx, element in enumerate(section_elements)
@@ -1089,8 +1081,71 @@ class TemplateRenderer:
                     last_element = cloned_table
             return tables
 
+        start_idx, end_idx = _bookmark_body_range(self.body, "tpl_result_sections")
+        all_children = list(self.body)
+        boundary_after = (
+            all_children[end_idx + 1]
+            if end_idx + 1 < len(all_children)
+            else self.body.sectPr
+        )
+        children = all_children[start_idx:end_idx + 1]
+        anchor = next(
+            (
+                element
+                for element in children
+                if local_tag(element) == "p"
+                and "{{repeat.result_sections}}" in _get_paragraph_text(element)
+            ),
+            None,
+        )
+        if anchor is None:
+            raise ValueError("Missing repeat result_sections anchor")
+        children.remove(anchor)
+        remove_element(anchor)
+
+        def section_blocks(elements):
+            positions = [
+                index
+                for index, element in enumerate(elements)
+                if local_tag(element) == "p"
+                and re.match(r"^4\.\d+", _get_paragraph_text(element).strip())
+            ]
+            return [
+                elements[position:(positions[offset + 1] if offset + 1 < len(positions) else len(elements))]
+                for offset, position in enumerate(positions)
+            ]
+
+        blocks = section_blocks(children)
+        if not blocks:
+            raise ValueError("Result section repeat has no prototype block")
+
+        while len(blocks) < len(sections):
+            cloned = [copy.deepcopy(element) for element in blocks[-1]]
+            for element in cloned:
+                self._remove_bookmark_markers(element)
+                boundary_after.addprevious(element)
+            next_section = sections[len(blocks)]
+            heading = next(
+                element
+                for element in cloned
+                if local_tag(element) == "p"
+                and re.match(r"^4\.\d+", _get_paragraph_text(element).strip())
+            )
+            _set_paragraph_text(
+                heading,
+                f"{next_section.get('section_number', '')} prototype",
+            )
+            children.extend(cloned)
+            blocks.append(cloned)
+
+        for index, section in enumerate(sections):
+            heading = blocks[index][0]
+            _set_paragraph_text(
+                heading,
+                f"{section.get('section_number', '')} prototype",
+            )
+
         sec_map = {sec.get("section_number", ""): sec for sec in sections}
-        children = collect_children()
 
         i = 0
         while i < len(children):
@@ -1137,7 +1192,7 @@ class TemplateRenderer:
                 if paragraph_has_visible_text(element) or local_tag(element) == "tbl":
                     remove_element(element)
 
-            insert_before = children[block_end] if block_end < len(children) else None
+            insert_before = children[block_end] if block_end < len(children) else boundary_after
             if insert_before is not None and insert_before.getparent() is not None:
                 clone_missing_units(units, len(subtopics), insert_before)
 

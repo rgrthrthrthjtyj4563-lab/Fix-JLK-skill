@@ -2330,6 +2330,7 @@ class TemplatePreflightTest(unittest.TestCase):
                 "items": ["item"],
                 "closing": "closing",
             },
+            "result_analysis": {"sections": [{"subtopics": ["item"]}]},
             "summary": {
                 "overall_analysis": ["overall"],
                 "recommendations": ["recommendation"],
@@ -2342,7 +2343,7 @@ class TemplatePreflightTest(unittest.TestCase):
         # The bundled template contains Task 5 fields plus Task 6 block
         # singletons and must preflight clean for a complete minimal payload.
         self.assertEqual(result["status"], "ok", msg=result)
-        self.assertEqual(result["metrics"]["distinct_placeholders"], 15)
+        self.assertEqual(result["metrics"]["distinct_placeholders"], 16)
 
 
 class TemplateEngineTest(unittest.TestCase):
@@ -2655,6 +2656,7 @@ class RepeatPlaceholderTemplateTest(unittest.TestCase):
     EXPECTED = {
         "{{repeat.key_issue_items}}": "tpl_key_issue_items",
         "{{repeat.attachment_questions}}": "tpl_attachment_questions",
+        "{{repeat.result_sections}}": "tpl_result_sections",
     }
 
     def test_bundled_template_contains_repeat_tokens_and_bookmarks(self) -> None:
@@ -2700,6 +2702,59 @@ class RepeatPlaceholderTemplateTest(unittest.TestCase):
                 "MISSING_BLOCK_BOUNDARY",
                 {error["code"] for error in result["errors"]},
             )
+
+    def test_result_section_repeat_clones_single_prototype(self) -> None:
+        from docx import Document
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from scripts.render_from_template import TemplateRenderer
+
+        with tempfile.TemporaryDirectory() as tmp:
+            template_path = Path(tmp) / "result-repeat.docx"
+            doc = Document()
+            anchor = doc.add_paragraph("{{repeat.result_sections}}")
+            start = OxmlElement("w:bookmarkStart")
+            start.set(qn("w:id"), "61")
+            start.set(qn("w:name"), "tpl_result_sections")
+            anchor._p.insert(0, start)
+            doc.add_paragraph("4.1原型", style="Heading 2")
+            doc.add_paragraph("原型小标题", style="Heading 3")
+            analysis = doc.add_paragraph("原型分析")
+            end = OxmlElement("w:bookmarkEnd")
+            end.set(qn("w:id"), "61")
+            analysis._p.append(end)
+            doc.save(template_path)
+
+            sections = [
+                {
+                    "section_number": f"4.{index}",
+                    "section_title": f"维度{index}",
+                    "visual_groups": [],
+                    "subtopics": [
+                        {
+                            "subtitle": f"问题{index}分析",
+                            "question_refs": [],
+                            "paragraphs": [f"第{index}段分析"],
+                        }
+                    ],
+                }
+                for index in range(1, 4)
+            ]
+            renderer = TemplateRenderer(
+                template_path,
+                {"result_analysis": {"sections": sections}},
+            )
+            renderer.replace_analysis_sections()
+            texts = [
+                "".join(t.text or "" for t in paragraph.findall(".//" + qn("w:t"))).strip()
+                for paragraph in renderer.body
+                if paragraph.tag == qn("w:p")
+            ]
+            self.assertEqual(
+                [text for text in texts if text.startswith("4.")],
+                ["4.1 维度1", "4.2 维度2", "4.3 维度3"],
+            )
+            self.assertNotIn("{{repeat.result_sections}}", texts)
 
 
 if __name__ == "__main__":
