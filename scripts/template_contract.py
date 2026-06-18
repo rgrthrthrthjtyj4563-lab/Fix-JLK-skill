@@ -69,6 +69,10 @@ class TemplateContract:
     required_payload_paths: tuple[str, ...] = ()
     required_singletons: tuple[str, ...] = ()
     optional_singletons: tuple[str, ...] = ()
+    # Placeholders that are allowed to appear zero or more times in the
+    # template. Used to whitelist legitimate repeat occurrences such as
+    # ``{{field.service.unit}}`` on the cover and settlement pages.
+    field_placeholders: tuple[str, ...] = ()
     allowed_chart_modes: dict[str, tuple[str, ...]] = field(default_factory=dict)
     manifest_path: Path = field(default_factory=lambda: Path("."))
 
@@ -230,6 +234,9 @@ def load_manifest(manifest_path: Path) -> TemplateContract:
     optional_singletons = _ensure_str_list(
         raw.get("optional_singletons"), "optional_singletons", manifest_path
     )
+    field_placeholders = _ensure_str_list(
+        raw.get("field_placeholders"), "field_placeholders", manifest_path
+    )
 
     overlap = set(required_singletons) & set(optional_singletons)
     if overlap:
@@ -252,6 +259,7 @@ def load_manifest(manifest_path: Path) -> TemplateContract:
         required_payload_paths=required_payload_paths,
         required_singletons=required_singletons,
         optional_singletons=optional_singletons,
+        field_placeholders=field_placeholders,
         allowed_chart_modes=allowed_chart_modes,
         manifest_path=manifest_path.resolve(),
     )

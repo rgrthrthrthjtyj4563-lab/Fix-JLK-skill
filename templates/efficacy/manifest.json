@@ -9,16 +9,27 @@
     "meta.product",
     "meta.region",
     "meta.template_doc",
-    "result_sections"
+    "result_sections",
+    "service.unit",
+    "service.date"
   ],
   "required_singletons": [],
   "optional_singletons": [],
+  "field_placeholders": [
+    "{{field.meta.product}}",
+    "{{field.meta.region}}",
+    "{{field.meta.survey_period_display}}",
+    "{{field.meta.sample_size}}",
+    "{{field.service.unit}}",
+    "{{field.service.date}}"
+  ],
   "allowed_chart_modes": {
     "result_overview_charts": ["image"],
     "key_issue_charts": ["office"]
   },
   "notes": [
-    "required_singletons / optional_singletons are populated incrementally as Tasks 5-8 inject {{field.*}}, {{block.*}}, {{repeat.*}} and {{media.*}} placeholders into the template.",
+    "Task 5 inserted six {{field.*}} placeholders in cover-page metadata, settlement page service block, sample-collection range/count, and footer date. The same placeholder is allowed to appear multiple times (e.g. {{field.service.unit}} occurs on the cover page and the settlement page); they are therefore listed under field_placeholders rather than required_singletons. Preflight uses field_placeholders only to whitelist their kind/path so {{...}} tokens that don't match any declared name still trigger INVALID_PLACEHOLDER.",
+    "required_singletons remains the contract for placeholders that must appear exactly once (block / repeat anchors inserted by Tasks 6-8).",
     "allowed_chart_modes captures the locked-in answer to spec Q3: chapter-4 result-overview charts are PNG drawings (two), section 5.1 key-issue charts are native Office 3D pie drawings (two)."
   ]
 }

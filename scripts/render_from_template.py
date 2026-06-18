@@ -697,6 +697,46 @@ class TemplateRenderer:
         """Replace text in a paragraph, preserving drawings. Delegates to template_engine."""
         _engine_safe_replace_in_paragraph(p_element, old, new)
 
+    def _apply_field_placeholders(self, mapping: dict[str, str]) -> int:
+        """Resolve ``{{field.path}}`` placeholders in body, headers, footers.
+
+        ``mapping`` is keyed by the bare path (e.g. ``"field.meta.product"``);
+        the corresponding ``{{...}}`` token is built and substituted using the
+        cross-run-safe primitives from :mod:`scripts.template_engine`.
+
+        Empty replacement values are tolerated (the placeholder is replaced
+        with the empty string) so that downstream final validation can still
+        flag missing payload fields if any. Returns the count of replaced
+        occurrences for logging/tests.
+        """
+        count = 0
+        for path, value in mapping.items():
+            token = "{{" + path + "}}"
+            replacement = "" if value is None else str(value)
+
+            # 1. Body paragraphs at any depth (including nested table cells).
+            #    body.iter(qn('w:p')) traverses every w:p descendant which
+            #    matches the iteration used by the placeholder injection
+            #    script and avoids missing tokens that live inside tbl > tr >
+            #    tc > tbl > ... structures.
+            for p in self.body.iter(qn("w:p")):
+                if _replace_text_across_runs(p, token, replacement):
+                    count += 1
+
+            # 2. Headers / footers across every section.
+            for section in self.doc.sections:
+                for container in (
+                    section.header, section.footer,
+                    section.first_page_header, section.first_page_footer,
+                ):
+                    try:
+                        for p in container.paragraphs:
+                            if _replace_text_across_runs(p._element, token, replacement):
+                                count += 1
+                    except Exception:  # pragma: no cover - defensive
+                        pass
+        return count
+
     def replace_metadata(self):
         """Replace all metadata placeholders."""
         product = self.meta.get("product", "")
@@ -706,6 +746,21 @@ class TemplateRenderer:
         survey_period_display = self.meta.get("survey_period_display", survey_period)
         service_date = self.payload.get("service", {}).get("date", "")
         service_unit = self.payload.get("service", {}).get("unit", "")
+
+        # Phase A: Resolve explicit {{field.*}} placeholders inserted by Task 5.
+        # This must run before the legacy literal-string replacements below so
+        # that any pre-rendered template area uses the canonical placeholder
+        # path, not a brittle substring search. Legacy literal occurrences in
+        # questionnaire titles, attachment, and narrative text continue to be
+        # handled by the substring passes that follow (see Task 9 cleanup).
+        self._apply_field_placeholders({
+            "field.meta.product": product,
+            "field.meta.region": region,
+            "field.meta.survey_period_display": survey_period_display,
+            "field.meta.sample_size": str(sample_size) if sample_size else "",
+            "field.service.unit": service_unit,
+            "field.service.date": service_date,
+        })
 
         # Replace "厄贝沙坦氢氯噻嗪片" with product name
         if product and product != "厄贝沙坦氢氯噻嗪片":

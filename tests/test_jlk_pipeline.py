@@ -2318,12 +2318,21 @@ class TemplatePreflightTest(unittest.TestCase):
                 "region": "测试地区",
                 "template_doc": str(contract.template_path),
             },
+            "service": {
+                "unit": "测试服务商",
+                "date": "2026-01-01",
+            },
             "result_sections": [],
         }
         result = preflight_template(contract, payload, mode="warning")
-        # Until Tasks 5-8 inject placeholders the bundled template has no
-        # required_singletons, so the only acceptable status is 'ok'.
+        # The bundled template now contains the six {{field.*}} placeholders
+        # inserted by Task 5; required_singletons stays empty so any extra
+        # repetition is permitted. The manifest must therefore preflight
+        # clean for a complete-but-minimal payload.
         self.assertEqual(result["status"], "ok", msg=result)
+        # 6 distinct placeholders should be detected (13 total occurrences,
+        # but only the distinct count is asserted here).
+        self.assertEqual(result["metrics"]["distinct_placeholders"], 6)
 
 
 class TemplateEngineTest(unittest.TestCase):
@@ -2477,6 +2486,84 @@ class TemplateEngineTest(unittest.TestCase):
         )
         replace_text_across_runs(p, "{{field.meta.survey_period}}", "2025年11月1日-11月30日")
         self.assertEqual(self._text_of(p), "调研时间：2025年11月1日-11月30日")
+
+
+class FieldPlaceholderTemplateTest(unittest.TestCase):
+    """Cover Task 5: the bundled docx now carries six {{field.*}} placeholders.
+
+    These tests assert *both* that the template was modified as expected and
+    that the renderer's new ``_apply_field_placeholders`` pass replaces the
+    tokens before any legacy substring substitutions run.
+    """
+
+    EXPECTED_TOKENS = (
+        "{{field.meta.product}}",
+        "{{field.meta.region}}",
+        "{{field.meta.survey_period_display}}",
+        "{{field.meta.sample_size}}",
+        "{{field.service.unit}}",
+        "{{field.service.date}}",
+    )
+
+    def test_bundled_template_contains_all_field_placeholders(self) -> None:
+        from scripts.template_preflight import scan_template_placeholders
+
+        template_path = ROOT / "templates" / "efficacy-report-template.docx"
+        occurrences = scan_template_placeholders(template_path)
+        for token in self.EXPECTED_TOKENS:
+            with self.subTest(token=token):
+                self.assertIn(token, occurrences,
+                              f"{token} not present in {template_path.name}")
+
+    def test_v0_baseline_template_has_no_placeholders(self) -> None:
+        """Sanity: the pre-migration fixture is preserved unchanged."""
+        from scripts.template_preflight import scan_template_placeholders
+
+        baseline = ROOT / "tests" / "fixtures" / "templates" / "efficacy-report-template-v0.docx"
+        occurrences = scan_template_placeholders(baseline)
+        self.assertEqual(occurrences, {})
+
+    def test_apply_field_placeholders_replaces_all_tokens(self) -> None:
+        from docx.oxml.ns import qn
+        from scripts.render_from_template import TemplateRenderer
+
+        template_path = ROOT / "templates" / "efficacy-report-template.docx"
+        payload = {
+            "meta": {
+                "product": "心达康胶囊",
+                "region": "湖南省",
+                "survey_period_display": "2025年7月1日—7月31日",
+                "sample_size": 1234,
+            },
+            "service": {
+                "unit": "测试服务商",
+                "date": "2026-02-15",
+            },
+        }
+        renderer = TemplateRenderer(template_path, payload)
+        replaced = renderer._apply_field_placeholders({
+            "field.meta.product": payload["meta"]["product"],
+            "field.meta.region": payload["meta"]["region"],
+            "field.meta.survey_period_display": payload["meta"]["survey_period_display"],
+            "field.meta.sample_size": str(payload["meta"]["sample_size"]),
+            "field.service.unit": payload["service"]["unit"],
+            "field.service.date": payload["service"]["date"],
+        })
+        self.assertGreater(replaced, 0, "expected at least one replacement")
+
+        # After the pass no {{field.*}} tokens may remain anywhere in body.
+        body_text = "".join(
+            (t.text or "")
+            for p in renderer.body.iter(qn("w:p"))
+            for t in p.findall(".//" + qn("w:t"))
+        )
+        for token in self.EXPECTED_TOKENS:
+            self.assertNotIn(token, body_text, f"{token} leaked after render")
+        # And the substituted values should be present.
+        self.assertIn("心达康胶囊", body_text)
+        self.assertIn("湖南省", body_text)
+        self.assertIn("2025年7月1日—7月31日", body_text)
+        self.assertIn("1234", body_text)
 
 
 if __name__ == "__main__":
