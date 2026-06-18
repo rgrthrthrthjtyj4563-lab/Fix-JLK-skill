@@ -2073,5 +2073,258 @@ class TemplateContractTest(unittest.TestCase):
             self.assertIn("both required and optional", str(ctx.exception))
 
 
+class TemplatePreflightTest(unittest.TestCase):
+    """Cover Task 3: scripts/template_preflight.py.
+
+    The bundled efficacy template currently has no placeholders inserted yet
+    (Tasks 5-8 will add them), so the manifest's required_singletons list is
+    empty. These tests exercise the loader on a synthetic template + manifest
+    so we can assert each error code without coupling to template state in
+    flux.
+    """
+
+    def _make_manifest_with_template(
+        self,
+        tmp: Path,
+        body_text: str,
+        manifest_overrides: dict | None = None,
+    ) -> tuple[Path, Path]:
+        """Build a tiny docx that contains ``body_text`` in document.xml and
+        write a manifest pointing at it. Returns ``(manifest_path, docx_path)``.
+        """
+        from zipfile import ZipFile, ZIP_DEFLATED
+
+        tpl_dir = tmp / "tpl"
+        tpl_dir.mkdir(parents=True)
+        docx_path = tpl_dir / "tiny.docx"
+
+        # Minimal valid docx: [Content_Types], _rels/.rels, word/document.xml.
+        content_types = (
+            "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
+            "<Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'>"
+            "<Default Extension='rels' ContentType='application/vnd.openxmlformats-package.relationships+xml'/>"
+            "<Default Extension='xml' ContentType='application/xml'/>"
+            "<Override PartName='/word/document.xml' ContentType='application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'/>"
+            "</Types>"
+        )
+        rels = (
+            "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
+            "<Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>"
+            "<Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument' Target='word/document.xml'/>"
+            "</Relationships>"
+        )
+        document_xml = (
+            "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
+            "<w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>"
+            "<w:body>" + body_text + "</w:body></w:document>"
+        )
+        with ZipFile(docx_path, "w", ZIP_DEFLATED) as zf:
+            zf.writestr("[Content_Types].xml", content_types)
+            zf.writestr("_rels/.rels", rels)
+            zf.writestr("word/document.xml", document_xml)
+
+        body = {
+            "schema_version": 1,
+            "template_id": "tiny-v1",
+            "template_type": "patient-questionnaire-report",
+            "template_file": "tiny.docx",
+            "renderer": "scripts.render_from_template:TemplateRenderer",
+            "required_payload_paths": ["meta.product"],
+            "required_singletons": [],
+            "optional_singletons": [],
+            "allowed_chart_modes": {},
+        }
+        if manifest_overrides:
+            body.update(manifest_overrides)
+        manifest_path = tpl_dir / "manifest.json"
+        manifest_path.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+        return manifest_path, docx_path
+
+    def test_preflight_passes_when_payload_satisfies_contract(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = "<w:p><w:r><w:t>plain template body</w:t></w:r></w:p>"
+            manifest_path, _ = self._make_manifest_with_template(Path(tmp), body)
+            contract = load_manifest(manifest_path)
+            payload = {"meta": {"product": "心达康"}}
+            result = preflight_template(contract, payload, mode="warning")
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["errors"], [])
+
+    def test_preflight_flags_missing_payload_path(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), "<w:p/>",
+                manifest_overrides={"required_payload_paths": ["meta.region"]},
+            )
+            contract = load_manifest(manifest_path)
+            payload = {"meta": {"product": "X"}}
+            result = preflight_template(contract, payload, mode="warning")
+            codes = {err["code"] for err in result["errors"]}
+            self.assertIn("MISSING_PAYLOAD_PATH", codes)
+
+    def test_preflight_flags_invalid_payload_type_when_value_is_null(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), "<w:p/>",
+                manifest_overrides={"required_payload_paths": ["meta.product"]},
+            )
+            contract = load_manifest(manifest_path)
+            payload = {"meta": {"product": None}}
+            result = preflight_template(contract, payload, mode="warning")
+            codes = {err["code"] for err in result["errors"]}
+            self.assertIn("INVALID_PAYLOAD_TYPE", codes)
+
+    def test_preflight_flags_missing_required_singleton(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = "<w:p><w:r><w:t>only literal text</w:t></w:r></w:p>"
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), body,
+                manifest_overrides={
+                    "required_payload_paths": [],
+                    "required_singletons": ["{{field.meta.product}}"],
+                },
+            )
+            contract = load_manifest(manifest_path)
+            result = preflight_template(contract, {}, mode="warning")
+            codes = {err["code"] for err in result["errors"]}
+            self.assertIn("MISSING_PLACEHOLDER", codes)
+
+    def test_preflight_detects_placeholder_split_across_runs(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # Word frequently splits a single ``{{field.meta.product}}`` token
+            # across multiple ``w:r``/``w:t`` runs. Preflight must still detect
+            # it after stripping XML tags.
+            body = (
+                "<w:p>"
+                "<w:r><w:t>{{fie</w:t></w:r>"
+                "<w:r><w:t>ld.meta.</w:t></w:r>"
+                "<w:r><w:t>product}}</w:t></w:r>"
+                "</w:p>"
+            )
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), body,
+                manifest_overrides={
+                    "required_payload_paths": [],
+                    "required_singletons": ["{{field.meta.product}}"],
+                },
+            )
+            contract = load_manifest(manifest_path)
+            result = preflight_template(contract, {}, mode="warning")
+            codes = {err["code"] for err in result["errors"]}
+            self.assertNotIn("MISSING_PLACEHOLDER", codes)
+
+    def test_preflight_flags_duplicate_singleton(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = (
+                "<w:p><w:r><w:t>{{field.meta.product}}</w:t></w:r></w:p>"
+                "<w:p><w:r><w:t>{{field.meta.product}}</w:t></w:r></w:p>"
+            )
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), body,
+                manifest_overrides={
+                    "required_payload_paths": [],
+                    "required_singletons": ["{{field.meta.product}}"],
+                },
+            )
+            contract = load_manifest(manifest_path)
+            result = preflight_template(contract, {}, mode="warning")
+            codes = {err["code"] for err in result["errors"]}
+            self.assertIn("DUPLICATE_SINGLETON", codes)
+
+    def test_preflight_flags_invalid_placeholder_kind(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = "<w:p><w:r><w:t>{{unknown.kind}}</w:t></w:r></w:p>"
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), body,
+                manifest_overrides={"required_payload_paths": []},
+            )
+            contract = load_manifest(manifest_path)
+            result = preflight_template(contract, {}, mode="warning")
+            codes = {err["code"] for err in result["errors"]}
+            self.assertIn("INVALID_PLACEHOLDER", codes)
+
+    def test_preflight_flags_invalid_chart_mode(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), "<w:p/>",
+                manifest_overrides={
+                    "required_payload_paths": [],
+                    "allowed_chart_modes": {"result_overview_charts": ["image"]},
+                },
+            )
+            contract = load_manifest(manifest_path)
+            payload = {
+                "result_overview_charts": [
+                    {"render_mode": "office"},
+                    {"render_mode": "image"},
+                ],
+            }
+            result = preflight_template(contract, payload, mode="warning")
+            codes = {err["code"] for err in result["errors"]}
+            self.assertIn("INVALID_CHART_MODE", codes)
+
+    def test_preflight_fail_mode_raises(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import (
+            preflight_template,
+            TemplatePreflightError,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), "<w:p/>",
+                manifest_overrides={"required_payload_paths": ["meta.product"]},
+            )
+            contract = load_manifest(manifest_path)
+            with self.assertRaises(TemplatePreflightError) as ctx:
+                preflight_template(contract, {}, mode="fail")
+            self.assertEqual(ctx.exception.errors[0]["code"], "MISSING_PAYLOAD_PATH")
+
+    def test_preflight_runs_against_bundled_efficacy_manifest(self) -> None:
+        """The shipped efficacy manifest should preflight clean against a
+        minimally-populated payload while the migration is still in flight."""
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        manifest_path = ROOT / "templates" / "efficacy" / "manifest.json"
+        contract = load_manifest(manifest_path)
+        payload = {
+            "meta": {
+                "product": "测试产品",
+                "region": "测试地区",
+                "template_doc": str(contract.template_path),
+            },
+            "result_sections": [],
+        }
+        result = preflight_template(contract, payload, mode="warning")
+        # Until Tasks 5-8 inject placeholders the bundled template has no
+        # required_singletons, so the only acceptable status is 'ok'.
+        self.assertEqual(result["status"], "ok", msg=result)
+
+
 if __name__ == "__main__":
     unittest.main()

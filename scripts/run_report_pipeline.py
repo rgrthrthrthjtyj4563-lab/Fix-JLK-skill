@@ -17,11 +17,15 @@ try:
     from .final_validate_docx import FinalValidationError, validate_docx
     from .parse_questionnaire import parse_sheet
     from .render_from_template import TemplateRenderer
+    from .template_contract import ContractError, load_manifest
+    from .template_preflight import TemplatePreflightError, preflight_template
 except ImportError:
     from build_payload import build_payload, parse_markdown_content, validate_payload, PreflightError, preflight_report_content, load_dimension_library
     from final_validate_docx import FinalValidationError, validate_docx
     from parse_questionnaire import parse_sheet
     from render_from_template import TemplateRenderer
+    from template_contract import ContractError, load_manifest
+    from template_preflight import TemplatePreflightError, preflight_template
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -209,11 +213,35 @@ def main() -> None:
         payload_json = run_dir / "report_payload.json"
         payload_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # template_preflight is recorded as a phase even when no work is done yet,
-    # so downstream perf tooling sees a stable schema. The actual preflight
-    # logic is added in a later task (see Task 3).
+    # template_preflight: load the bundled manifest and validate the rendered
+    # contract against payload + template docx. While Tasks 5-8 are still
+    # injecting placeholders, run in 'warning' mode so any contract gap is
+    # written to template_preflight.json without aborting the render. Once
+    # all placeholders are migrated this should be flipped to 'fail'.
     with timer.phase("template_preflight"):
-        pass
+        manifest_path = ROOT / "templates" / "efficacy" / "manifest.json"
+        template_preflight_json = run_dir / "template_preflight.json"
+        try:
+            contract = load_manifest(manifest_path)
+            preflight_doc = preflight_template(contract, payload, mode="warning")
+        except ContractError as exc:
+            preflight_doc = {
+                "status": "error",
+                "mode": "warning",
+                "errors": [{"code": exc.code, "message": str(exc)}],
+                "warnings": [],
+            }
+            print(f"TEMPLATE_PREFLIGHT_WARNING: {exc}", file=sys.stderr)
+        template_preflight_json.write_text(
+            json.dumps(preflight_doc, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        if preflight_doc.get("errors"):
+            print(
+                f"TEMPLATE_PREFLIGHT_WARNING: {len(preflight_doc['errors'])} issue(s); see "
+                f"{template_preflight_json.resolve()}",
+                file=sys.stderr,
+            )
 
     output_docx = Path(args.output_docx) if args.output_docx else run_dir / "report.docx"
     output_docx.parent.mkdir(parents=True, exist_ok=True)
