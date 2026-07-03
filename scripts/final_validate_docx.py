@@ -9,6 +9,11 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from zipfile import ZipFile
 
+try:
+    from ._internal_ref_guard import INTERNAL_REF_PATTERN
+except ImportError:  # script-mode fallback
+    from _internal_ref_guard import INTERNAL_REF_PATTERN  # type: ignore
+
 from docx import Document
 
 try:
@@ -617,9 +622,37 @@ def _validate_subtitle_formality(payload: dict) -> None:
                     )
 
 
+def _validate_no_internal_refs_leaked(texts: list[str]) -> None:
+    """Final defense: scan all visible text for internal `q\\d+` refs.
+
+    Preflight should have caught these in the markdown draft, but if a
+    render-layer substitution or future pipeline change leaks them into the
+    final docx, this gate stops the report from going out the door.
+    """
+    for index, text in enumerate(texts, start=1):
+        match = INTERNAL_REF_PATTERN.search(text)
+        if not match:
+            continue
+        start = max(0, match.start() - 20)
+        end = min(len(text), match.end() + 20)
+        snippet = text[start:end]
+        if start > 0:
+            snippet = "..." + snippet
+        if end < len(text):
+            snippet = snippet + "..."
+        raise FinalValidationError(
+            f"Internal question ref `q\\d+` leaked into DOCX visible text at "
+            f"node #{index} (match: {snippet!r}). "
+            "Front matter `key_issue_question_refs` is the only legal carrier; "
+            "remove the leak from the source draft and re-render."
+        )
+
+
 def validate_docx(docx_path: Path, payload: dict) -> None:
     doc = Document(str(docx_path))
     texts = _visible_paragraph_texts(doc)
+    root, ns = _document_xml_root(docx_path)
+    package_texts = [node.text or "" for node in root.findall(".//w:t", ns)]
     _validate_sample_size_text(texts, payload)
     _validate_result_sections(texts, payload)
     _validate_analysis_paragraphs(texts, payload)
@@ -639,6 +672,9 @@ def validate_docx(docx_path: Path, payload: dict) -> None:
     _validate_survey_period_display_format(texts, payload)
     _validate_service_provider_consistency(texts, payload)
     _validate_51_text_chart_order(docx_path, payload)
+    # Final defense: scan all rendered text (body + tables + headers/footers +
+    # chart text) for any leaked internal question refs.
+    _validate_no_internal_refs_leaked(texts + package_texts)
 
 
 def main() -> None:

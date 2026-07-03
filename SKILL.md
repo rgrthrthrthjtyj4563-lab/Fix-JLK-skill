@@ -109,6 +109,27 @@ description: "Use when generating patient questionnaire analysis reports for pha
 - Markdown 正文不需要写字段名。解析后的每个子主题正文存入内部字段 `paragraphs`；不要构造或依赖名为 `analysis` 的字段。
 - 标题标记后必须有空格，例如 `#### 用药行为分析`，不要写成 `####用药行为分析`。
 
+### 内部题号与编排痕迹禁入正文
+
+`q01`/`q02`/... 这类内部题号属于数据模型内部字段，**严禁在 4.x、5.1、5.2、5.3
+段落正文里出现**（front matter 的 `key_issue_question_refs` 是数据契约，不渲染到 Word，
+不在禁用范围内）。同样禁用的还有"第 N 段对应 qXX"这类暴露内部编排的写法。
+
+| 错误示例 | 正确改写 |
+|---|---|
+| `与q07反馈形成相互印证` | `与服药频次维度的反馈形成相互印证` |
+| `第1段对应q02"治疗范围认知"：` | `厄贝沙坦氢氯噻嗪片治疗范围认知方面，` |
+| `q03统计结果显示，46.99%的患者……` | `本次统计显示，46.99%的患者……` |
+| `第2段对应q05："复查项目认知……` | `复查项目认知方面，33.99%的患者……` |
+
+Word 文档面向医生、药店、药企，读者不需要知道 `q07` 是什么，也不需要看到"第 N 段"
+之类的生成痕迹。**front matter 的 `key_issue_question_refs` 仍然要求提供 q\d+ 字符串**，
+因为 render 层据此绑定图表与题号绑定，但 front matter 不渲染到 Word 可见文本。
+
+校验链路：preflight 在 4.x/5.1/5.2/5.3 解析后的正文段上查 `q\d+` 与
+`第\s*\d+\s*段`；final validator 在 DOCX 可见文本节点（正文、表格、页眉页脚、图表文字）
+上做兜底扫描，命中即拒。
+
 完整可复制骨架和错误示例见 `references/report-content-template.md`。需要生成或修复
 `report_content.md` 时读取该文件，避免在主 skill 中重复加载大段模板。
 

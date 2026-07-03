@@ -738,6 +738,12 @@ def require_ai_analysis_paragraphs(
             "请将多段内容合并为 1 段。"
         )
     text = normalized[0]
+    # Internal-ref guard: q\d+ and "第N段" must not appear in 4.x body text.
+    try:
+        from ._internal_ref_guard import assert_clean_body_text
+    except ImportError:  # script-mode fallback
+        from _internal_ref_guard import assert_clean_body_text
+    assert_clean_body_text(text, location=f"{section_number} / {question_ref} / {subtitle}")
     char_count = len(text)
     prose_issues = prose_quality_issues(text)
     if not ed_is_complete(text) or prose_issues:
@@ -1128,6 +1134,14 @@ def choose_key_issue_analysis(ai_paragraphs: list[str], expected_count: int) -> 
                     "contains fixed programmatic wording；"
                     "请移除程序化固定句式，改用个性化分析。"
                 )
+        # Internal-ref guard: q\d+ and "第N段" must not appear in 5.1 body text.
+        try:
+            from ._internal_ref_guard import assert_clean_body_text
+        except ImportError:
+            from _internal_ref_guard import assert_clean_body_text
+        assert_clean_body_text(
+            paragraph, location=f"5.1问卷重点问题分析 / 第 {index} 段"
+        )
         issues = prose_quality_issues(paragraph)
         if issues:
             raise ValueError(
@@ -1590,6 +1604,12 @@ def choose_overall_analysis(
             "5.2调研结果总结：缺少 analytical judgment（需包含说明/表明/反映/提示/判断之一）；请在正文中加入分析判断词。"
         )
     for index, paragraph in enumerate(normalized, start=1):
+        # Internal-ref guard: q\d+ and "第N段" must not appear in 5.2 body text.
+        try:
+            from ._internal_ref_guard import assert_clean_body_text
+        except ImportError:
+            from _internal_ref_guard import assert_clean_body_text
+        assert_clean_body_text(paragraph, location=f"5.2调研结果总结 / 第 {index} 段")
         issues = prose_quality_issues(paragraph)
         if issues:
             raise ValueError(f"5.2调研结果总结 / 第 {index} 段：" + "；".join(issues))
@@ -1662,6 +1682,12 @@ def choose_recommendations(ai_paragraphs: list[str], fallback: list[str]) -> lis
             "请在每条建议中加入具体的工具或载体。"
         )
     for index, paragraph in enumerate(normalized, start=1):
+        # Internal-ref guard: q\d+ and "第N段" must not appear in 5.3 body text.
+        try:
+            from ._internal_ref_guard import assert_clean_body_text
+        except ImportError:
+            from _internal_ref_guard import assert_clean_body_text
+        assert_clean_body_text(paragraph, location=f"5.3建议 / 第 {index} 段")
         issues = prose_quality_issues(paragraph)
         if issues:
             raise ValueError(f"5.3建议 / 第 {index} 段：" + "；".join(issues))
