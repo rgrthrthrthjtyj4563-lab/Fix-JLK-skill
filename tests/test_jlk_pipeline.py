@@ -81,6 +81,10 @@ def expected_result_table_questions(payload: dict) -> list[str]:
     return expected
 
 
+def _clean_question_for_test(text: str) -> str:
+    return re.sub(r"[\s\u200b]+", "", str(text or ""))
+
+
 AI_KEY_ISSUE_PARAGRAPH_1 = (
     "血压控制相关重点问题反映出患者对厄贝沙坦氢氯噻嗪片真实使用效果的核心判断。"
     "从样本反馈看，正向评价集中度较高，说明多数患者能够在日常监测和自身感受中形成较稳定的控压认知，"
@@ -576,8 +580,7 @@ class PipelineTest(unittest.TestCase):
         service_dt = datetime.strptime(payload["service"]["date"], "%Y年%m月%d日").date()
         self.assertGreaterEqual(service_dt, date(2025, 11, 1))
         self.assertLessEqual(service_dt, date(2025, 11, 30))
-        self.assertEqual(payload["disclaimer"]["unit"], payload["service"]["unit"])
-        self.assertEqual(payload["disclaimer"]["date"], payload["service"]["date"])
+        self.assertNotIn("disclaimer", payload)
         self.assertEqual(payload["summary"]["key_issue_analysis"], [AI_KEY_ISSUE_PARAGRAPH_1, AI_KEY_ISSUE_PARAGRAPH_2])
         self.assertNotEqual(payload["summary"]["key_issue_analysis"], payload["summary"]["key_issue_analysis_programmatic"])
         self.assertEqual(len(payload["summary"]["key_issue_items"]), 2)
@@ -1077,8 +1080,10 @@ class PipelineTest(unittest.TestCase):
             texts = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
             all_text = "\n".join(texts)
             expected_table_questions = expected_result_table_questions(payload)
-            for required in ["问卷调研服务结算", "目录", "前言", "项目背景", "项目开展情况", "问卷说明", "问卷结果分析", "调研结果", "免责申明"]:
+            for required in ["问卷调研服务结算", "目录", "前言", "项目背景", "项目开展情况", "问卷说明", "问卷结果分析", "调研结果"]:
                 self.assertIn(required, texts)
+            self.assertNotIn("免责申明", texts)
+            self.assertNotIn("免责声明", texts)
             self.assertLess(texts.index("目录"), texts.index("前言"))
             self.assertIn(payload["report_title"], texts)
             self.assertIn("4.1 药品疗效", texts)
@@ -1093,6 +1098,7 @@ class PipelineTest(unittest.TestCase):
                 body_text = texts[subtitle_idx + 1]
                 self.assertGreaterEqual(len(body_text), MIN_ANALYSIS_CHARS)
                 self.assertLessEqual(len(body_text), MAX_ANALYSIS_CHARS)
+
                 self.assertNotRegex(body_text, r"[ABCD]\.")
                 self.assertRegex(body_text, r"[%％]")
                 self.assertNotIn("选项A", body_text)
@@ -1110,8 +1116,6 @@ class PipelineTest(unittest.TestCase):
             self.assertIn(f"服务单位：{payload['service']['unit']}", texts)
             self.assertIn(f"日期：{payload['service']['date']}", texts)
             self.assertLess(texts.index(f"服务单位：{payload['service']['unit']}"), texts.index(f"日期：{payload['service']['date']}"))
-            self.assertIn(f"服务提供单位:{payload['service']['unit']}", texts)
-            self.assertIn(payload["service"]["date"], texts)
             settlement = [[cell.text.strip() for cell in row.cells] for row in document.tables[0].rows]
             self.assertEqual(settlement[1][3], "1789例")
             self.assertEqual(settlement[1][4], "178,900")
@@ -1146,22 +1150,6 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(first_key_issue_para.alignment, 3)
             self.assertEqual(first_key_issue_para.paragraph_format.line_spacing, 2.5)
             self.assertEqual(first_key_issue_para.paragraph_format.first_line_indent, 304800)
-            disclaimer_heading = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == "免责申明")
-            disclaimer_heading_pos = next(i for i, paragraph in enumerate(document.paragraphs) if paragraph.text.strip() == "免责申明")
-            disclaimer_item = next(
-                paragraph
-                for paragraph in document.paragraphs[disclaimer_heading_pos + 1:]
-                if paragraph.text.strip().startswith("（1）")
-            )
-            disclaimer_unit = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == f"服务提供单位:{payload['service']['unit']}")
-            self.assertEqual(disclaimer_heading.alignment, 1)
-            self.assertTrue(disclaimer_heading.runs)
-            self.assertEqual(disclaimer_heading.runs[0].font.name, "宋体")
-            self.assertEqual(disclaimer_heading.runs[0].font.size.pt, 16)
-            self.assertTrue(disclaimer_heading.runs[0].bold)
-            self.assertEqual(disclaimer_item.alignment, 3)
-            self.assertEqual(disclaimer_item.paragraph_format.first_line_indent, 0)
-            self.assertEqual(disclaimer_unit.alignment, 2)
             attachment_question = next(paragraph for paragraph in document.paragraphs if "您服用厄贝沙坦氢氯噻嗪片后，血压控制效果如何？" in paragraph.text.strip())
             attachment_option = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip().startswith("A. 选项A"))
             self.assertEqual(attachment_question.runs[0].font.name, "宋体")
@@ -1259,6 +1247,79 @@ class PipelineTest(unittest.TestCase):
                 expected_options = [f"{opt['code']}. {opt['text']}" for opt in question["options"]]
                 actual_options = attachment_body[question_pos + 1:question_pos + 1 + len(expected_options)]
                 self.assertEqual(actual_options, expected_options)
+
+    def test_render_three_option_tables_remove_stale_template_column(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            questionnaire = copy.deepcopy(efficacy_questionnaire())
+            for question in questionnaire["questions"]:
+                question["options"] = question["options"][:3]
+
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                questionnaire,
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+            output_docx = Path(temp_dir) / "three-options.docx"
+            TemplateRenderer(Path(payload["meta"]["template_doc"]), payload).render(output_docx)
+
+            document = Document(output_docx)
+            expected_questions = {_clean_question_for_test(q) for q in expected_result_table_questions(payload)}
+            result_tables = [
+                table for table in document.tables
+                if table.rows and _clean_question_for_test(table.cell(0, 0).text) in expected_questions
+            ]
+            self.assertTrue(result_tables)
+            for table in result_tables:
+                self.assertEqual(len(table.columns), 5)
+                self.assertEqual(len(table.rows[0].cells), 5)
+                self.assertFalse(any("选项D" in cell.text for row in table.rows for cell in row.cells))
+
+    def test_render_normalizes_ascii_quotes_and_removes_disclaimer_page(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown().replace("患者", '"患者"', 1), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+            output_docx = Path(temp_dir) / "normalized.docx"
+            TemplateRenderer(Path(payload["meta"]["template_doc"]), payload).render(output_docx)
+
+            document = Document(output_docx)
+            visible = "\n".join(
+                [paragraph.text for paragraph in document.paragraphs]
+                + [cell.text for table in document.tables for row in table.rows for cell in row.cells]
+            )
+            self.assertNotIn('"', visible)
+            self.assertIn('“患者”', visible)
+            self.assertNotIn("免责申明", visible)
+            self.assertNotIn("免责声明", visible)
+            validate_docx(output_docx, payload)
 
     def test_render_from_template_does_not_fallback_to_first_visual_group_on_unmatched_table(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1446,10 +1507,16 @@ class PipelineTest(unittest.TestCase):
             with self.assertRaisesRegex(FinalValidationError, "Attachment 1 heading mismatch"):
                 validate_docx(attachment_heading_docx, payload)
 
-            disclaimer_size_docx = Path(temp_dir) / "bad-disclaimer-size.docx"
-            copy_docx_with_disclaimer_size(output_docx, disclaimer_size_docx, "28")
-            with self.assertRaisesRegex(FinalValidationError, "Disclaimer heading"):
-                validate_docx(disclaimer_size_docx, payload)
+            disclaimer_docx = Path(temp_dir) / "bad-disclaimer.docx"
+            copy_docx_with_document_xml_replace(
+                output_docx,
+                disclaimer_docx,
+                payload["report_title"],
+                payload["report_title"] + "免责声明",
+                count=1,
+            )
+            with self.assertRaisesRegex(FinalValidationError, "removed disclaimer"):
+                validate_docx(disclaimer_docx, payload)
 
             font_docx = Path(temp_dir) / "bad-font.docx"
             copy_docx_with_document_xml_replace(output_docx, font_docx, "宋体", "SimSun", count=1000)
@@ -1789,7 +1856,7 @@ class PipelineTest(unittest.TestCase):
             "2025年10月01日-10月15日",
         )
 
-    def test_validate_payload_rejects_service_unit_mismatch(self) -> None:
+    def test_build_payload_omits_removed_disclaimer_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             report_content = Path(temp_dir) / "content.md"
             report_content.write_text(sample_markdown(), encoding="utf-8")
@@ -1809,33 +1876,7 @@ class PipelineTest(unittest.TestCase):
                     disclaimer_unit=None,
                 ),
             )
-        payload["service"]["unit"] = "甲方A"
-        payload["disclaimer"]["unit"] = "乙方B"
-        with self.assertRaisesRegex(ValueError, "Service unit and disclaimer unit must be identical"):
-            validate_payload(payload)
-
-    def test_validate_payload_accepts_matching_service_unit(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            report_content = Path(temp_dir) / "content.md"
-            report_content.write_text(sample_markdown(), encoding="utf-8")
-            meta, content = parse_markdown_content(report_content)
-            payload = build_payload(
-                efficacy_questionnaire(),
-                meta,
-                content,
-                Namespace(
-                    product=None,
-                    region=None,
-                    time=None,
-                    attachment_name=None,
-                    survey_period=None,
-                    sample_size=None,
-                    valid_count=None,
-                    disclaimer_unit=None,
-                ),
-            )
-        payload["service"]["unit"] = "北京玖麟空科技有限公司"
-        payload["disclaimer"]["unit"] = "北京玖麟空科技有限公司"
+        self.assertNotIn("disclaimer", payload)
         validate_payload(payload)
 
     def test_final_validator_rejects_leaked_none_values(self) -> None:
@@ -1861,7 +1902,7 @@ class PipelineTest(unittest.TestCase):
 
     def test_final_validator_rejects_unreplaced_project_name(self) -> None:
         from scripts.final_validate_docx import _validate_service_provider_consistency
-        payload = {"service": {"unit": "某公司"}, "disclaimer": {"unit": "某公司"}}
+        payload = {"service": {"unit": "某公司"}}
         with self.assertRaises(FinalValidationError):
             _validate_service_provider_consistency(
                 ["服务商：项目名称"], payload
@@ -2824,7 +2865,6 @@ class BlockPlaceholderTemplateTest(unittest.TestCase):
         "{{block.questionnaire_note}}",
         "{{block.summary.overall_analysis}}",
         "{{block.summary.recommendations}}",
-        "{{block.disclaimer.items}}",
     )
 
     def test_bundled_template_contains_all_block_placeholders(self) -> None:

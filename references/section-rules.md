@@ -12,7 +12,6 @@
 9. `调研结果`
 10. `附件1`
 11. `附件2`
-12. `免责申明`
 
 ## Preface
 - Must be exactly `2` paragraphs.

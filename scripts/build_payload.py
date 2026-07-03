@@ -165,6 +165,23 @@ def normalize_pct(text: str) -> str:
     return f"{float(value):.2f}%"
 
 
+def normalize_chinese_quotes(text: str) -> str:
+    """Convert paired ASCII double quotes in reader-visible Chinese text."""
+    return re.sub(r'"([^"\r\n]+)"', r'“\1”', str(text or ""))
+
+
+def normalize_payload_typography(value):
+    if isinstance(value, dict):
+        return {key: normalize_payload_typography(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [normalize_payload_typography(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(normalize_payload_typography(item) for item in value)
+    if isinstance(value, str):
+        return normalize_chinese_quotes(value)
+    return value
+
+
 def split_front_matter(text: str) -> tuple[dict, str]:
     stripped = text.lstrip("\ufeff")
     match = re.match(r"^\s*---\s*\n(.*?)\n\s*---\s*\n?(.*)$", stripped, flags=re.DOTALL)
@@ -1863,7 +1880,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
         },
     ]
 
-    return {
+    payload = {
         "meta": {
             "product": product,
             "region": region,
@@ -1919,22 +1936,13 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "attachment1_questions": attachment_questions,
             "attachment2_name": "问卷调查明细表",
         },
-        "disclaimer": {
-            "title": "免责申明",
-            "items": [
-                "（1）本次调研项目以随机选取对象进行面对面调研，本次调研只对本次样本数据负责。",
-                f"（2）承接单位调研项目，是针对{product}这一品种调研，并非指定厂家指定品种。",
-                "（3）本次调研只针对调研区域数据负责，不代表全国调研数据。",
-            ],
-            "unit": cli_args.disclaimer_unit or meta.get("disclaimer_unit") or "北京玖麟空科技有限公司",
-            "date": derive_service_date(survey_period),
-        },
         "chart_map": chart_map,
     }
+    return normalize_payload_typography(payload)
 
 
 def validate_payload(payload: dict) -> None:
-    for key in ["meta", "header_text", "report_title", "preface", "project_background", "project_execution", "questionnaire_note", "result_analysis", "summary", "attachments", "disclaimer"]:
+    for key in ["meta", "header_text", "report_title", "preface", "project_background", "project_execution", "questionnaire_note", "result_analysis", "summary", "attachments"]:
         if key not in payload:
             raise ValueError(f"Missing payload key: {key}")
     if len(payload["preface"]) != 2:
@@ -1997,10 +2005,6 @@ def validate_payload(payload: dict) -> None:
             raise ValueError("Settlement report amount is incorrect.")
         if int(settlement.get("total_amount", -1)) != expected_sample_amount + expected_report_amount:
             raise ValueError("Settlement total amount is incorrect.")
-    service_unit = payload.get("service", {}).get("unit", "")
-    disclaimer_unit = payload.get("disclaimer", {}).get("unit", "")
-    if service_unit and disclaimer_unit and service_unit != disclaimer_unit:
-        raise ValueError("Service unit and disclaimer unit must be identical.")
 
 
 def main() -> None:

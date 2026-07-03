@@ -34,8 +34,7 @@
     "summary.key_issue_items",
     "attachments.attachment1_name",
     "attachments.attachment1_questions",
-    "attachments.attachment2_name",
-    "disclaimer.items"
+    "attachments.attachment2_name"
   ],
   "payload_path_types": {
     "preface": "list",
@@ -48,8 +47,7 @@
     "summary.overall_analysis": "list",
     "summary.recommendations": "list",
     "summary.key_issue_items": "list",
-    "attachments.attachment1_questions": "list",
-    "disclaimer.items": "list"
+    "attachments.attachment1_questions": "list"
   },
   "required_singletons": [
     "{{block.preface}}",
@@ -59,7 +57,6 @@
     "{{block.result_analysis.intro}}",
     "{{block.summary.overall_analysis}}",
     "{{block.summary.recommendations}}",
-    "{{block.disclaimer.items}}",
     "{{repeat.key_issue_items}}",
     "{{repeat.attachment_questions}}",
     "{{repeat.result_sections}}",

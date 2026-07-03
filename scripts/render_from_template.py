@@ -1119,9 +1119,43 @@ class TemplateRenderer:
 
     def _replace_table_element(self, tbl_elem, visual: dict):
         """Replace data in a question data table element."""
-        rows = tbl_elem.findall(qn("w:tr"))
         table_data = visual.get("table_data", {})
         options = table_data.get("options", [])
+        desired_columns = 2 + len(options)
+
+        grid = tbl_elem.find(qn("w:tblGrid"))
+        option_width = None
+        if grid is not None:
+            grid_columns = grid.findall(qn("w:gridCol"))
+            original_option_widths = [
+                int(column.get(qn("w:w"), "0") or 0)
+                for column in grid_columns[2:]
+            ]
+            if options and original_option_widths:
+                option_width = max(1, round(sum(original_option_widths) / len(options)))
+            while len(grid_columns) < desired_columns and grid_columns:
+                grid.append(copy.deepcopy(grid_columns[-1]))
+                grid_columns = grid.findall(qn("w:gridCol"))
+            for column in grid_columns[desired_columns:]:
+                grid.remove(column)
+            if option_width is not None:
+                for column in grid.findall(qn("w:gridCol"))[2:]:
+                    column.set(qn("w:w"), str(option_width))
+
+        rows = tbl_elem.findall(qn("w:tr"))
+        for row in rows:
+            cells = row.findall(qn("w:tc"))
+            while len(cells) < desired_columns and cells:
+                row.append(copy.deepcopy(cells[-1]))
+                cells = row.findall(qn("w:tc"))
+            for cell in cells[desired_columns:]:
+                row.remove(cell)
+            if option_width is not None:
+                for cell in row.findall(qn("w:tc"))[2:]:
+                    tc_pr = cell.find(qn("w:tcPr"))
+                    tc_w = tc_pr.find(qn("w:tcW")) if tc_pr is not None else None
+                    if tc_w is not None:
+                        tc_w.set(qn("w:w"), str(option_width))
 
         if len(rows) < 3:
             return
@@ -1493,43 +1527,31 @@ class TemplateRenderer:
             _set_paragraph_style_props(paragraph, "宋体", 12, False)
         self._rebuild_anchors()
 
-    def replace_disclaimer(self):
-        """Render disclaimer items from the explicit block prototype."""
-        disclaimer = self.payload.get("disclaimer", {})
-        items = disclaimer.get("items", [])
-        heading_idx = self._find_exact_paragraph_index("免责申明")
-        if heading_idx is not None:
-            heading = self._get_paragraph_at(heading_idx)
-            _set_paragraph_style_props(heading, "宋体", 16, True, "center")
-        if items:
-            self._apply_block_placeholder("block.disclaimer.items", items)
-            item_texts = {str(item).strip() for item in items}
-            for paragraph in self.body.iter(qn("w:p")):
-                if _get_paragraph_text(paragraph).strip() in item_texts:
-                    _set_paragraph_style_props(
-                        paragraph,
-                        "宋体",
-                        12,
-                        False,
-                        "both",
-                        body_layout=True,
-                        first_line_chars=0,
-                    )
+    def remove_disclaimer(self):
+        """Remove the obsolete disclaimer page, including its page break."""
+        children = list(self.body)
+        heading_index = next(
+            (
+                index for index, element in enumerate(children)
+                if element.tag == qn("w:p")
+                and _get_paragraph_text(element).strip() in {"免责申明", "免责声明"}
+            ),
+            None,
+        )
+        if heading_index is None:
+            return
 
-        unit = self.payload.get("service", {}).get("unit", disclaimer.get("unit", ""))
-        date_str = self.payload.get("service", {}).get("date", disclaimer.get("date", ""))
-        signature_texts = {f"服务提供单位:{unit}", date_str}
-        for paragraph in self.body.iter(qn("w:p")):
-            if _get_paragraph_text(paragraph).strip() in signature_texts:
-                _set_paragraph_style_props(
-                    paragraph,
-                    "宋体",
-                    12,
-                    False,
-                    "right",
-                    body_layout=True,
-                    first_line_chars=0,
-                )
+        start_index = heading_index
+        if heading_index > 0:
+            previous = children[heading_index - 1]
+            if previous.tag == qn("w:p") and previous.findall(".//" + qn("w:br")):
+                start_index -= 1
+
+        for element in children[start_index:]:
+            if element.tag == qn("w:sectPr"):
+                break
+            self.body.remove(element)
+        self._rebuild_anchors()
 
     # ─── Paragraph formatting ───────────────────────────────────────────
     
@@ -1947,6 +1969,7 @@ class TemplateRenderer:
         self.replace_native_charts_with_pngs()
         self._rebuild_anchors()
         self.replace_attachments()
+        self.remove_disclaimer()
         
         # Phase 1.4: Uniform paragraph formatting (all body text: 两端对齐,
         # 首行缩进2字符, 2.5倍行距).
@@ -1955,7 +1978,6 @@ class TemplateRenderer:
         # Phase 1.5: Re-apply local layouts that must override the generic
         # body-format pass.
         self._rebuild_anchors()
-        self.replace_disclaimer()
         self._apply_global_font_name()
 
         # Save
@@ -1966,7 +1988,51 @@ class TemplateRenderer:
         self._insert_key_issue_native_charts(output_path)
         self._enable_update_fields_on_open(output_path)
 
+        # Phase 3: Clean up template residue (hardcoded product/region names).
+        self._cleanup_template_residue(output_path)
+
         return output_path
+
+    def _cleanup_template_residue(self, docx_path: Path) -> None:
+        """Replace hardcoded template product/region names with actual values.
+
+        The template contains literal text (e.g. 厄贝沙坦氢氯噻嗪片, 广东省)
+        that isn't covered by field-based replacements.  This method does a
+        low-level string sweep across all XML parts in the docx package.
+        """
+        import zipfile as _zipfile
+        product = self.meta.get("product", "")
+        region = self.meta.get("region", "")
+        if not product and not region:
+            return
+
+        replaces = {}
+        if product and product != "厄贝沙坦氢氯噻嗪片":
+            replaces["厄贝沙坦氢氯噻嗪片"] = product
+        if region and region != "广东省":
+            replaces["广东省"] = region
+
+        if not replaces:
+            return
+
+        tmp_path = docx_path.with_suffix(".cleanup_tmp")
+        try:
+            with _zipfile.ZipFile(docx_path, "r") as zin, \
+                 _zipfile.ZipFile(tmp_path, "w", _zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    data = zin.read(item.filename)
+                    if item.filename.endswith(".xml") or item.filename.endswith(".rels"):
+                        text = data.decode("utf-8", errors="replace")
+                        for old, new in replaces.items():
+                            text = text.replace(old, new)
+                        data = text.encode("utf-8")
+                    zout.writestr(item, data)
+            docx_path.unlink()
+            tmp_path.rename(docx_path)
+        except Exception:
+            if tmp_path.exists():
+                tmp_path.unlink()
+            raise
 
 
 # ─── CLI ─────────────────────────────────────────────────────────────────────

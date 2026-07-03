@@ -227,6 +227,33 @@ def _validate_result_tables(doc: Document, payload: dict) -> None:
             f"Result-analysis table questions mismatch. expected={expected}, actual={actual}"
         )
 
+    question_data = {
+        _clean_text(question.get("question", "")): question
+        for question in payload.get("attachments", {}).get("attachment1_questions", [])
+    }
+    for table in doc.tables:
+        if len(table.rows) < 3 or not table.rows[0].cells:
+            continue
+        question_key = _clean_text(table.cell(0, 0).text)
+        question = question_data.get(question_key)
+        if question_key not in expected or question is None:
+            continue
+        options = question.get("options", [])
+        expected_columns = 2 + len(options)
+        if len(table.columns) != expected_columns:
+            raise FinalValidationError(
+                f"Result table option-column mismatch for '{question.get('question', '')}'. "
+                f"expected={expected_columns}, actual={len(table.columns)}"
+            )
+        expected_headers = [f"{option.get('code', '')}.{option.get('text', '')}" for option in options]
+        expected_counts = [str(option.get("count", "")) for option in options]
+        expected_pcts = [str(option.get("pct", "")) for option in options]
+        actual_headers = [cell.text.strip() for cell in table.rows[0].cells[2:]]
+        actual_counts = [cell.text.strip() for cell in table.rows[1].cells[2:]]
+        actual_pcts = [cell.text.strip() for cell in table.rows[2].cells[2:]]
+        if (actual_headers, actual_counts, actual_pcts) != (expected_headers, expected_counts, expected_pcts):
+            raise FinalValidationError(f"Result table data mismatch for '{question.get('question', '')}'.")
+
 
 def _body_items_between_result_and_summary(docx_path: Path) -> list[tuple[str, str]]:
     ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
@@ -466,45 +493,19 @@ def _validate_font_xml(docx_path: Path) -> None:
             raise FinalValidationError(f"Unexpected font in visible text run: {values}")
 
 
-def _validate_disclaimer_heading_xml(docx_path: Path) -> None:
-    root, ns = _document_xml_root(docx_path)
-    for paragraph in root.findall(".//w:p", ns):
-        if _paragraph_text(paragraph, ns) != "免责申明":
-            continue
-        jc = paragraph.find("./w:pPr/w:jc", ns)
-        if jc is None or jc.get(f"{{{ns['w']}}}val") != "center":
-            raise FinalValidationError("Disclaimer heading must be centered.")
-        visible_runs = [
-            run for run in paragraph.findall("w:r", ns)
-            if "".join(node.text or "" for node in run.findall("w:t", ns)).strip()
-        ]
-        if not visible_runs:
-            raise FinalValidationError("Disclaimer heading has no visible runs.")
-        for run in visible_runs:
-            rpr = run.find("w:rPr", ns)
-            fonts = rpr.find("w:rFonts", ns) if rpr is not None else None
-            sz = rpr.find("w:sz", ns) if rpr is not None else None
-            bold = rpr.find("w:b", ns) if rpr is not None else None
-            font_values = [
-                fonts.get(f"{{{ns['w']}}}ascii") if fonts is not None else None,
-                fonts.get(f"{{{ns['w']}}}hAnsi") if fonts is not None else None,
-                fonts.get(f"{{{ns['w']}}}eastAsia") if fonts is not None else None,
-            ]
-            if any(value != EXPECTED_FONT for value in font_values):
-                raise FinalValidationError(f"Disclaimer heading font must be {EXPECTED_FONT}.")
-            if sz is None or sz.get(f"{{{ns['w']}}}val") != "32":
-                raise FinalValidationError("Disclaimer heading must use 16pt font size.")
-            if bold is None or bold.get(f"{{{ns['w']}}}val") == "0":
-                raise FinalValidationError("Disclaimer heading must be bold.")
-        return
-    raise FinalValidationError("Missing disclaimer heading.")
-
-
 def _validate_no_leaked_none_values(texts: list[str]) -> None:
     full_text = "\n".join(texts)
     for token in ["None", "nan", "null", "NaN", "NULL", "N/A", "undefined"]:
         if token in full_text:
             raise FinalValidationError(f"Rendered report contains leaked placeholder value: {token}")
+
+
+def _validate_reader_typography_and_removed_disclaimer(texts: list[str]) -> None:
+    full_text = "\n".join(texts)
+    if '"' in full_text:
+        raise FinalValidationError("Rendered report contains ASCII double quotes; use Chinese quotation marks.")
+    if "免责申明" in full_text or "免责声明" in full_text:
+        raise FinalValidationError("Rendered report still contains the removed disclaimer section.")
 
 
 def _validate_no_template_residue(docx_path: Path, payload: dict) -> None:
@@ -542,14 +543,13 @@ def _validate_survey_period_display_format(texts: list[str], payload: dict) -> N
 
 def _validate_service_provider_consistency(texts: list[str], payload: dict) -> None:
     service_unit = payload.get("service", {}).get("unit", "")
-    disclaimer_unit = payload.get("disclaimer", {}).get("unit", "")
-    if not service_unit or not disclaimer_unit:
+    if not service_unit:
         return
-    if service_unit != disclaimer_unit:
-        raise FinalValidationError(f"Service unit '{service_unit}' does not match disclaimer unit '{disclaimer_unit}'.")
     full_text = "\n".join(texts)
     if "项目名称" in full_text:
         raise FinalValidationError("Report still contains unreplaced placeholder '项目名称'.")
+    if f"服务商：{service_unit}" not in full_text:
+        raise FinalValidationError("Cover is missing the required service-provider label and unit.")
 
 
 def _validate_51_text_chart_order(docx_path: Path, payload: dict) -> None:
@@ -666,11 +666,11 @@ def validate_docx(docx_path: Path, payload: dict) -> None:
     _validate_subtopic_numbering_xml(docx_path)
     _validate_png_chart_layout(docx_path, payload)
     _validate_font_xml(docx_path)
-    _validate_disclaimer_heading_xml(docx_path)
     _validate_no_leaked_none_values(texts)
+    _validate_reader_typography_and_removed_disclaimer(texts + package_texts)
     _validate_no_template_residue(docx_path, payload)
     _validate_survey_period_display_format(texts, payload)
-    _validate_service_provider_consistency(texts, payload)
+    _validate_service_provider_consistency(texts + package_texts, payload)
     _validate_51_text_chart_order(docx_path, payload)
     # Final defense: scan all rendered text (body + tables + headers/footers +
     # chart text) for any leaked internal question refs.

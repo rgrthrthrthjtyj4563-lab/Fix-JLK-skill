@@ -75,11 +75,6 @@
     "attachment1_name": "厄贝沙坦氢氯噻嗪片用药体验与疗效反馈患者调查问卷",
     "attachment1_questions": [],
     "attachment2_name": "问卷调查明细表"
-  },
-  "disclaimer": {
-    "title": "免责申明",
-    "items": [],
-    "unit": "北京玖麟空科技有限公司"
   }
 }
 ```
