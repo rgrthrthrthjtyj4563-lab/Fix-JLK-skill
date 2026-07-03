@@ -5,6 +5,8 @@ import json
 import tempfile
 import unittest
 import copy
+import concurrent.futures
+import threading
 import xml.etree.ElementTree as ET
 from datetime import date, datetime
 from pathlib import Path
@@ -77,6 +79,10 @@ def expected_result_table_questions(payload: dict) -> list[str]:
                     expected.append(qmap[question_ref])
                     seen.add(question_ref)
     return expected
+
+
+def _clean_question_for_test(text: str) -> str:
+    return re.sub(r"[\s\u200b]+", "", str(text or ""))
 
 
 AI_KEY_ISSUE_PARAGRAPH_1 = (
@@ -574,8 +580,7 @@ class PipelineTest(unittest.TestCase):
         service_dt = datetime.strptime(payload["service"]["date"], "%Y年%m月%d日").date()
         self.assertGreaterEqual(service_dt, date(2025, 11, 1))
         self.assertLessEqual(service_dt, date(2025, 11, 30))
-        self.assertEqual(payload["disclaimer"]["unit"], payload["service"]["unit"])
-        self.assertEqual(payload["disclaimer"]["date"], payload["service"]["date"])
+        self.assertNotIn("disclaimer", payload)
         self.assertEqual(payload["summary"]["key_issue_analysis"], [AI_KEY_ISSUE_PARAGRAPH_1, AI_KEY_ISSUE_PARAGRAPH_2])
         self.assertNotEqual(payload["summary"]["key_issue_analysis"], payload["summary"]["key_issue_analysis_programmatic"])
         self.assertEqual(len(payload["summary"]["key_issue_items"]), 2)
@@ -652,6 +657,101 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(ctx.exception.result["status"], "failed")
         self.assertTrue(any("4.1 / q01" in error for error in ctx.exception.errors))
         self.assertLessEqual(len(ctx.exception.result["checks"]), 40)
+
+    def test_preflight_rejects_invalid_5_1_and_5_3_before_build_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+
+        bad_content = copy.deepcopy(content)
+        bad_content["summary"]["key_issue_analysis"][0] = (
+            "本段围绕重点问题展开数据描述，结合患者反馈梳理主要现象与管理背景，"
+            "并从真实用药场景补充相关影响因素和后续关注方向。"
+            * 8
+        )[:280]
+        bad_content["summary"]["recommendations"] = [
+            bad_content["summary"]["recommendations"][0],
+            "1. 针对患者用药执行不稳定的问题，应持续完善干预方式并明确执行步骤，帮助患者理解规范用药的重要性，形成稳定习惯并提升长期管理质量。" * 2,
+            *bad_content["summary"]["recommendations"][2:],
+        ]
+
+        with self.assertRaises(PreflightError) as ctx:
+            preflight_report_content(
+                meta,
+                bad_content,
+                library=load_dimension_library(),
+                questionnaire=efficacy_questionnaire(),
+            )
+
+        self.assertTrue(any("5.1" in error and "analytical judgment" in error for error in ctx.exception.errors))
+        self.assertTrue(any("5.3" in error and "concrete tools or carriers" in error for error in ctx.exception.errors))
+
+    def test_preflight_explains_level_3_subtopic_heading(self) -> None:
+        markdown = sample_markdown().replace(
+            "#### 血压控制效果分析",
+            "### 4.1.1 血压控制效果分析",
+            1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(markdown, encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+
+        with self.assertRaises(PreflightError) as ctx:
+            preflight_report_content(
+                meta,
+                content,
+                library=load_dimension_library(),
+                questionnaire=efficacy_questionnaire(),
+            )
+
+        joined = "\n".join(ctx.exception.errors)
+        self.assertIn("4.1.1 血压控制效果分析", joined)
+        self.assertIn("use ####", joined)
+
+    def test_parser_normalizes_decorated_level_4_subtopic_heading(self) -> None:
+        markdown = sample_markdown().replace(
+            "#### 血压控制效果分析",
+            "#### 4.1.1 血压控制效果分析——q01",
+            1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(markdown, encoding="utf-8")
+            _, content = parse_markdown_content(report_content)
+
+        self.assertEqual(
+            content["result_analysis"][0]["subtopics"][0]["subtitle"],
+            "血压控制效果分析",
+        )
+
+    def test_preflight_explains_unsupported_level_1_heading(self) -> None:
+        markdown = sample_markdown().replace("## 前言", "# 前言", 1)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(markdown, encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+
+        with self.assertRaises(PreflightError) as ctx:
+            preflight_report_content(
+                meta,
+                content,
+                library=load_dimension_library(),
+                questionnaire=efficacy_questionnaire(),
+            )
+
+        joined = "\n".join(ctx.exception.errors)
+        self.assertIn("# 前言", joined)
+        self.assertIn("use ##", joined)
+
+    def test_skill_documents_markdown_format_contract(self) -> None:
+        skill_text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("## Markdown Format Contract", skill_text)
+        self.assertIn("`### 4.1", skill_text)
+        self.assertIn("`####", skill_text)
+        self.assertIn("paragraphs", skill_text)
+        self.assertIn("提醒卡", skill_text)
 
     def test_preflight_theme_miss_suggests_limited_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -980,8 +1080,10 @@ class PipelineTest(unittest.TestCase):
             texts = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
             all_text = "\n".join(texts)
             expected_table_questions = expected_result_table_questions(payload)
-            for required in ["问卷调研服务结算", "目录", "前言", "项目背景", "项目开展情况", "问卷说明", "问卷结果分析", "调研结果", "免责申明"]:
+            for required in ["问卷调研服务结算", "目录", "前言", "项目背景", "项目开展情况", "问卷说明", "问卷结果分析", "调研结果"]:
                 self.assertIn(required, texts)
+            self.assertNotIn("免责申明", texts)
+            self.assertNotIn("免责声明", texts)
             self.assertLess(texts.index("目录"), texts.index("前言"))
             self.assertIn(payload["report_title"], texts)
             self.assertIn("4.1 药品疗效", texts)
@@ -996,6 +1098,7 @@ class PipelineTest(unittest.TestCase):
                 body_text = texts[subtitle_idx + 1]
                 self.assertGreaterEqual(len(body_text), MIN_ANALYSIS_CHARS)
                 self.assertLessEqual(len(body_text), MAX_ANALYSIS_CHARS)
+
                 self.assertNotRegex(body_text, r"[ABCD]\.")
                 self.assertRegex(body_text, r"[%％]")
                 self.assertNotIn("选项A", body_text)
@@ -1013,8 +1116,6 @@ class PipelineTest(unittest.TestCase):
             self.assertIn(f"服务单位：{payload['service']['unit']}", texts)
             self.assertIn(f"日期：{payload['service']['date']}", texts)
             self.assertLess(texts.index(f"服务单位：{payload['service']['unit']}"), texts.index(f"日期：{payload['service']['date']}"))
-            self.assertIn(f"服务提供单位:{payload['service']['unit']}", texts)
-            self.assertIn(payload["service"]["date"], texts)
             settlement = [[cell.text.strip() for cell in row.cells] for row in document.tables[0].rows]
             self.assertEqual(settlement[1][3], "1789例")
             self.assertEqual(settlement[1][4], "178,900")
@@ -1049,22 +1150,6 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(first_key_issue_para.alignment, 3)
             self.assertEqual(first_key_issue_para.paragraph_format.line_spacing, 2.5)
             self.assertEqual(first_key_issue_para.paragraph_format.first_line_indent, 304800)
-            disclaimer_heading = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == "免责申明")
-            disclaimer_heading_pos = next(i for i, paragraph in enumerate(document.paragraphs) if paragraph.text.strip() == "免责申明")
-            disclaimer_item = next(
-                paragraph
-                for paragraph in document.paragraphs[disclaimer_heading_pos + 1:]
-                if paragraph.text.strip().startswith("（1）")
-            )
-            disclaimer_unit = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip() == f"服务提供单位:{payload['service']['unit']}")
-            self.assertEqual(disclaimer_heading.alignment, 1)
-            self.assertTrue(disclaimer_heading.runs)
-            self.assertEqual(disclaimer_heading.runs[0].font.name, "宋体")
-            self.assertEqual(disclaimer_heading.runs[0].font.size.pt, 16)
-            self.assertTrue(disclaimer_heading.runs[0].bold)
-            self.assertEqual(disclaimer_item.alignment, 3)
-            self.assertEqual(disclaimer_item.paragraph_format.first_line_indent, 0)
-            self.assertEqual(disclaimer_unit.alignment, 2)
             attachment_question = next(paragraph for paragraph in document.paragraphs if "您服用厄贝沙坦氢氯噻嗪片后，血压控制效果如何？" in paragraph.text.strip())
             attachment_option = next(paragraph for paragraph in document.paragraphs if paragraph.text.strip().startswith("A. 选项A"))
             self.assertEqual(attachment_question.runs[0].font.name, "宋体")
@@ -1162,6 +1247,79 @@ class PipelineTest(unittest.TestCase):
                 expected_options = [f"{opt['code']}. {opt['text']}" for opt in question["options"]]
                 actual_options = attachment_body[question_pos + 1:question_pos + 1 + len(expected_options)]
                 self.assertEqual(actual_options, expected_options)
+
+    def test_render_three_option_tables_remove_stale_template_column(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            questionnaire = copy.deepcopy(efficacy_questionnaire())
+            for question in questionnaire["questions"]:
+                question["options"] = question["options"][:3]
+
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown(), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                questionnaire,
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+            output_docx = Path(temp_dir) / "three-options.docx"
+            TemplateRenderer(Path(payload["meta"]["template_doc"]), payload).render(output_docx)
+
+            document = Document(output_docx)
+            expected_questions = {_clean_question_for_test(q) for q in expected_result_table_questions(payload)}
+            result_tables = [
+                table for table in document.tables
+                if table.rows and _clean_question_for_test(table.cell(0, 0).text) in expected_questions
+            ]
+            self.assertTrue(result_tables)
+            for table in result_tables:
+                self.assertEqual(len(table.columns), 5)
+                self.assertEqual(len(table.rows[0].cells), 5)
+                self.assertFalse(any("选项D" in cell.text for row in table.rows for cell in row.cells))
+
+    def test_render_normalizes_ascii_quotes_and_removes_disclaimer_page(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_content = Path(temp_dir) / "content.md"
+            report_content.write_text(sample_markdown().replace("患者", '"患者"', 1), encoding="utf-8")
+            meta, content = parse_markdown_content(report_content)
+            payload = build_payload(
+                efficacy_questionnaire(),
+                meta,
+                content,
+                Namespace(
+                    product=None,
+                    region=None,
+                    time=None,
+                    attachment_name=None,
+                    survey_period=None,
+                    sample_size=None,
+                    valid_count=None,
+                    disclaimer_unit=None,
+                ),
+            )
+            output_docx = Path(temp_dir) / "normalized.docx"
+            TemplateRenderer(Path(payload["meta"]["template_doc"]), payload).render(output_docx)
+
+            document = Document(output_docx)
+            visible = "\n".join(
+                [paragraph.text for paragraph in document.paragraphs]
+                + [cell.text for table in document.tables for row in table.rows for cell in row.cells]
+            )
+            self.assertNotIn('"', visible)
+            self.assertIn('“患者”', visible)
+            self.assertNotIn("免责申明", visible)
+            self.assertNotIn("免责声明", visible)
+            validate_docx(output_docx, payload)
 
     def test_render_from_template_does_not_fallback_to_first_visual_group_on_unmatched_table(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1349,15 +1507,32 @@ class PipelineTest(unittest.TestCase):
             with self.assertRaisesRegex(FinalValidationError, "Attachment 1 heading mismatch"):
                 validate_docx(attachment_heading_docx, payload)
 
-            disclaimer_size_docx = Path(temp_dir) / "bad-disclaimer-size.docx"
-            copy_docx_with_disclaimer_size(output_docx, disclaimer_size_docx, "28")
-            with self.assertRaisesRegex(FinalValidationError, "Disclaimer heading"):
-                validate_docx(disclaimer_size_docx, payload)
+            disclaimer_docx = Path(temp_dir) / "bad-disclaimer.docx"
+            copy_docx_with_document_xml_replace(
+                output_docx,
+                disclaimer_docx,
+                payload["report_title"],
+                payload["report_title"] + "免责声明",
+                count=1,
+            )
+            with self.assertRaisesRegex(FinalValidationError, "removed disclaimer"):
+                validate_docx(disclaimer_docx, payload)
 
             font_docx = Path(temp_dir) / "bad-font.docx"
             copy_docx_with_document_xml_replace(output_docx, font_docx, "宋体", "SimSun", count=1000)
             with self.assertRaisesRegex(FinalValidationError, "Unexpected font"):
                 validate_docx(font_docx, payload)
+
+            placeholder_docx = Path(temp_dir) / "bad-placeholder.docx"
+            copy_docx_with_document_xml_replace(
+                output_docx,
+                placeholder_docx,
+                payload["report_title"],
+                "{{field.report_title}}",
+                count=1,
+            )
+            with self.assertRaisesRegex(FinalValidationError, "placeholder"):
+                validate_docx(placeholder_docx, payload)
 
     def test_derive_preface_and_background_follow_template_rules(self) -> None:
         preface = derive_preface("厄贝沙坦氢氯噻嗪片", "北京市", "1789")
@@ -1681,7 +1856,7 @@ class PipelineTest(unittest.TestCase):
             "2025年10月01日-10月15日",
         )
 
-    def test_validate_payload_rejects_service_unit_mismatch(self) -> None:
+    def test_build_payload_omits_removed_disclaimer_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             report_content = Path(temp_dir) / "content.md"
             report_content.write_text(sample_markdown(), encoding="utf-8")
@@ -1701,33 +1876,7 @@ class PipelineTest(unittest.TestCase):
                     disclaimer_unit=None,
                 ),
             )
-        payload["service"]["unit"] = "甲方A"
-        payload["disclaimer"]["unit"] = "乙方B"
-        with self.assertRaisesRegex(ValueError, "Service unit and disclaimer unit must be identical"):
-            validate_payload(payload)
-
-    def test_validate_payload_accepts_matching_service_unit(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            report_content = Path(temp_dir) / "content.md"
-            report_content.write_text(sample_markdown(), encoding="utf-8")
-            meta, content = parse_markdown_content(report_content)
-            payload = build_payload(
-                efficacy_questionnaire(),
-                meta,
-                content,
-                Namespace(
-                    product=None,
-                    region=None,
-                    time=None,
-                    attachment_name=None,
-                    survey_period=None,
-                    sample_size=None,
-                    valid_count=None,
-                    disclaimer_unit=None,
-                ),
-            )
-        payload["service"]["unit"] = "北京玖麟空科技有限公司"
-        payload["disclaimer"]["unit"] = "北京玖麟空科技有限公司"
+        self.assertNotIn("disclaimer", payload)
         validate_payload(payload)
 
     def test_final_validator_rejects_leaked_none_values(self) -> None:
@@ -1753,7 +1902,7 @@ class PipelineTest(unittest.TestCase):
 
     def test_final_validator_rejects_unreplaced_project_name(self) -> None:
         from scripts.final_validate_docx import _validate_service_provider_consistency
-        payload = {"service": {"unit": "某公司"}, "disclaimer": {"unit": "某公司"}}
+        payload = {"service": {"unit": "某公司"}}
         with self.assertRaises(FinalValidationError):
             _validate_service_provider_consistency(
                 ["服务商：项目名称"], payload
@@ -1833,6 +1982,1221 @@ class PipelineTest(unittest.TestCase):
 
             with self.assertRaisesRegex(FinalValidationError, "text/chart order"):
                 _validate_51_text_chart_order(wrong_order_docx, payload)
+
+
+class PipelineEntrypointTest(unittest.TestCase):
+    """Cover Task 1 plumbing: phase timer + fail-fast final validation.
+
+    These tests exercise the two small primitives extracted from
+    ``run_report_pipeline.main`` rather than re-running the full pipeline,
+    which would be expensive and largely re-test other modules.
+    """
+
+    def test_phase_names_match_documented_order(self) -> None:
+        from scripts.run_report_pipeline import PHASE_NAMES
+
+        # The skill spec requires this exact ordered set so that
+        # downstream perf tooling can rely on a stable schema.
+        # ai_content_generation and local_retry are optional phases
+        # recorded only when parallel/retry is used by external orchestration.
+        self.assertEqual(
+            PHASE_NAMES,
+            (
+                "parse_questionnaire",
+                "preflight_content",
+                "ai_content_generation",
+                "build_payload",
+                "template_preflight",
+                "render_docx",
+                "local_retry",
+                "final_validate_docx",
+                "total",
+            ),
+        )
+
+    def test_phase_timer_records_each_phase_independently(self) -> None:
+        from scripts.run_report_pipeline import PhaseTimer
+
+        timer = PhaseTimer()
+        with timer.phase("parse_questionnaire"):
+            pass
+        with timer.phase("render_docx"):
+            pass
+        timings = timer.as_dict()
+        self.assertIn("parse_questionnaire", timings)
+        self.assertIn("render_docx", timings)
+        for value in timings.values():
+            self.assertIsInstance(value, float)
+            self.assertGreaterEqual(value, 0.0)
+
+    def test_phase_timer_rejects_unknown_phase_name(self) -> None:
+        from scripts.run_report_pipeline import PhaseTimer
+
+        timer = PhaseTimer()
+        with self.assertRaises(ValueError):
+            with timer.phase("not_a_phase"):
+                pass
+
+    def test_finalize_with_validation_passthrough_on_success(self) -> None:
+        from scripts.run_report_pipeline import finalize_with_validation
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            output_docx = run_dir / "report.docx"
+            output_docx.write_bytes(b"fake docx bytes")
+
+            calls: list[tuple[Path, dict]] = []
+
+            def fake_validate(path: Path, payload: dict) -> None:
+                calls.append((path, payload))
+
+            from scripts import run_report_pipeline as pipeline
+
+            original = pipeline.validate_docx
+            pipeline.validate_docx = fake_validate  # type: ignore[assignment]
+            try:
+                finalize_with_validation(output_docx, {"meta": {}}, run_dir)
+            finally:
+                pipeline.validate_docx = original  # type: ignore[assignment]
+
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(output_docx.exists(), "successful validation must keep the docx")
+            self.assertFalse((run_dir / "final_validation_error.json").exists())
+
+    def test_finalize_with_validation_removes_docx_on_failure(self) -> None:
+        from scripts.run_report_pipeline import (
+            finalize_with_validation,
+            PipelineFinalValidationError,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            output_docx = run_dir / "report.docx"
+            output_docx.write_bytes(b"fake docx bytes")
+
+            def boom(path: Path, payload: dict) -> None:
+                raise FinalValidationError("synthetic validation failure")
+
+            from scripts import run_report_pipeline as pipeline
+
+            original = pipeline.validate_docx
+            pipeline.validate_docx = boom  # type: ignore[assignment]
+            try:
+                with self.assertRaises(PipelineFinalValidationError) as ctx:
+                    finalize_with_validation(output_docx, {"meta": {}}, run_dir)
+            finally:
+                pipeline.validate_docx = original  # type: ignore[assignment]
+
+            self.assertEqual(ctx.exception.run_dir, run_dir)
+            self.assertIn("synthetic validation failure", str(ctx.exception))
+            self.assertFalse(
+                output_docx.exists(),
+                "fail-fast must remove the docx so it is not delivered",
+            )
+
+            error_path = run_dir / "final_validation_error.json"
+            self.assertTrue(error_path.exists())
+            payload = json.loads(error_path.read_text(encoding="utf-8"))
+            self.assertIn("synthetic validation failure", payload["error"])
+            self.assertEqual(Path(payload["run_dir"]).resolve(), run_dir.resolve())
+
+    def test_template_preflight_failure_is_written_and_raised_before_render(self) -> None:
+        from scripts.run_report_pipeline import run_template_preflight
+        from scripts.template_preflight import TemplatePreflightError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            with self.assertRaises(TemplatePreflightError):
+                run_template_preflight({"meta": {}}, run_dir)
+            result_path = run_dir / "template_preflight.json"
+            self.assertTrue(result_path.exists())
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(result["mode"], "fail")
+            self.assertEqual(result["status"], "error")
+
+
+class TemplateContractTest(unittest.TestCase):
+    """Cover Task 2: scripts/template_contract.py manifest loader."""
+
+    def _write(self, root: Path, name: str, body: dict) -> Path:
+        manifest_dir = root / name
+        manifest_dir.mkdir(parents=True)
+        # Drop a fake docx alongside so template_file resolves successfully.
+        (manifest_dir / "template.docx").write_bytes(b"fake docx")
+        manifest_path = manifest_dir / "manifest.json"
+        manifest_path.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+        return manifest_path
+
+    def _valid_body(self) -> dict:
+        return {
+            "schema_version": 1,
+            "template_id": "test-v1",
+            "template_type": "patient-questionnaire-report",
+            "template_file": "template.docx",
+            "renderer": "scripts.render_from_template:TemplateRenderer",
+            "required_payload_paths": ["meta.product"],
+            "required_singletons": ["field.meta.product"],
+            "optional_singletons": ["block.preface"],
+            "allowed_chart_modes": {"result_overview_charts": ["image"]},
+        }
+
+    def test_loads_bundled_efficacy_manifest(self) -> None:
+        from scripts.template_contract import load_manifest
+
+        manifest_path = ROOT / "templates" / "efficacy" / "manifest.json"
+        contract = load_manifest(manifest_path)
+        self.assertEqual(contract.schema_version, 1)
+        self.assertEqual(contract.template_id, "efficacy-v1")
+        self.assertEqual(contract.template_type, "patient-questionnaire-report")
+        # template_file points at templates/efficacy-report-template.docx
+        self.assertEqual(
+            contract.template_path,
+            (ROOT / "templates" / "efficacy-report-template.docx").resolve(),
+        )
+        self.assertIn("meta.product", contract.required_payload_paths)
+        self.assertEqual(
+            contract.allowed_chart_modes["result_analysis.overview_charts"],
+            ("image",),
+        )
+        self.assertIn("word/charts/chart1.xml", contract.required_parts)
+
+    def test_rejects_missing_required_field(self) -> None:
+        from scripts.template_contract import load_manifest, ContractError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = self._valid_body()
+            del body["renderer"]
+            manifest_path = self._write(Path(tmp), "broken", body)
+            with self.assertRaises(ContractError) as ctx:
+                load_manifest(manifest_path)
+            self.assertEqual(ctx.exception.code, "INVALID_MANIFEST")
+            self.assertIn("renderer", str(ctx.exception))
+
+    def test_rejects_unsupported_schema_version(self) -> None:
+        from scripts.template_contract import load_manifest, ContractError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = self._valid_body()
+            body["schema_version"] = 99
+            manifest_path = self._write(Path(tmp), "future", body)
+            with self.assertRaises(ContractError) as ctx:
+                load_manifest(manifest_path)
+            self.assertEqual(ctx.exception.code, "UNSUPPORTED_SCHEMA_VERSION")
+
+    def test_rejects_unknown_template_type(self) -> None:
+        from scripts.template_contract import load_manifest, ContractError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = self._valid_body()
+            body["template_type"] = "marketing-flyer"
+            manifest_path = self._write(Path(tmp), "wrong-type", body)
+            with self.assertRaises(ContractError) as ctx:
+                load_manifest(manifest_path)
+            self.assertEqual(ctx.exception.code, "INVALID_TEMPLATE_TYPE")
+
+    def test_rejects_missing_template_file(self) -> None:
+        from scripts.template_contract import load_manifest, ContractError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = self._valid_body()
+            body["template_file"] = "does-not-exist.docx"
+            # write manifest manually so we don't drop a template.docx.
+            manifest_dir = Path(tmp) / "missing"
+            manifest_dir.mkdir()
+            manifest_path = manifest_dir / "manifest.json"
+            manifest_path.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaises(ContractError) as ctx:
+                load_manifest(manifest_path)
+            self.assertEqual(ctx.exception.code, "TEMPLATE_NOT_FOUND")
+
+    def test_rejects_path_escape(self) -> None:
+        from scripts.template_contract import load_manifest, ContractError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            templates_root = Path(tmp) / "templates"
+            templates_root.mkdir()
+            manifest_dir = templates_root / "evil"
+            manifest_dir.mkdir()
+            manifest_path = manifest_dir / "manifest.json"
+            body = self._valid_body()
+            body["template_file"] = "../../etc/passwd"
+            manifest_path.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaises(ContractError) as ctx:
+                load_manifest(manifest_path)
+            self.assertEqual(ctx.exception.code, "PATH_ESCAPE")
+
+    def test_rejects_singleton_overlap(self) -> None:
+        from scripts.template_contract import load_manifest, ContractError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = self._valid_body()
+            body["required_singletons"] = ["field.meta.product"]
+            body["optional_singletons"] = ["field.meta.product"]
+            manifest_path = self._write(Path(tmp), "overlap", body)
+            with self.assertRaises(ContractError) as ctx:
+                load_manifest(manifest_path)
+            self.assertEqual(ctx.exception.code, "INVALID_MANIFEST")
+            self.assertIn("both required and optional", str(ctx.exception))
+
+
+class TemplatePreflightTest(unittest.TestCase):
+    """Cover Task 3: scripts/template_preflight.py.
+
+    The bundled efficacy template currently has no placeholders inserted yet
+    (Tasks 5-8 will add them), so the manifest's required_singletons list is
+    empty. These tests exercise the loader on a synthetic template + manifest
+    so we can assert each error code without coupling to template state in
+    flux.
+    """
+
+    def _make_manifest_with_template(
+        self,
+        tmp: Path,
+        body_text: str,
+        manifest_overrides: dict | None = None,
+    ) -> tuple[Path, Path]:
+        """Build a tiny docx that contains ``body_text`` in document.xml and
+        write a manifest pointing at it. Returns ``(manifest_path, docx_path)``.
+        """
+        from zipfile import ZipFile, ZIP_DEFLATED
+
+        tpl_dir = tmp / "tpl"
+        tpl_dir.mkdir(parents=True)
+        docx_path = tpl_dir / "tiny.docx"
+
+        # Minimal valid docx: [Content_Types], _rels/.rels, word/document.xml.
+        content_types = (
+            "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
+            "<Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'>"
+            "<Default Extension='rels' ContentType='application/vnd.openxmlformats-package.relationships+xml'/>"
+            "<Default Extension='xml' ContentType='application/xml'/>"
+            "<Override PartName='/word/document.xml' ContentType='application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'/>"
+            "</Types>"
+        )
+        rels = (
+            "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
+            "<Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>"
+            "<Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument' Target='word/document.xml'/>"
+            "</Relationships>"
+        )
+        document_xml = (
+            "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
+            "<w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>"
+            "<w:body>" + body_text + "</w:body></w:document>"
+        )
+        with ZipFile(docx_path, "w", ZIP_DEFLATED) as zf:
+            zf.writestr("[Content_Types].xml", content_types)
+            zf.writestr("_rels/.rels", rels)
+            zf.writestr("word/document.xml", document_xml)
+
+        body = {
+            "schema_version": 1,
+            "template_id": "tiny-v1",
+            "template_type": "patient-questionnaire-report",
+            "template_file": "tiny.docx",
+            "renderer": "scripts.render_from_template:TemplateRenderer",
+            "required_payload_paths": ["meta.product"],
+            "required_singletons": [],
+            "optional_singletons": [],
+            "allowed_chart_modes": {},
+        }
+        if manifest_overrides:
+            body.update(manifest_overrides)
+        manifest_path = tpl_dir / "manifest.json"
+        manifest_path.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+        return manifest_path, docx_path
+
+    def test_preflight_passes_when_payload_satisfies_contract(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = "<w:p><w:r><w:t>plain template body</w:t></w:r></w:p>"
+            manifest_path, _ = self._make_manifest_with_template(Path(tmp), body)
+            contract = load_manifest(manifest_path)
+            payload = {"meta": {"product": "心达康"}}
+            result = preflight_template(contract, payload, mode="warning")
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["errors"], [])
+
+    def test_preflight_flags_missing_payload_path(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), "<w:p/>",
+                manifest_overrides={"required_payload_paths": ["meta.region"]},
+            )
+            contract = load_manifest(manifest_path)
+            payload = {"meta": {"product": "X"}}
+            result = preflight_template(contract, payload, mode="warning")
+            codes = {err["code"] for err in result["errors"]}
+            self.assertIn("MISSING_PAYLOAD_PATH", codes)
+
+    def test_preflight_flags_invalid_payload_type_when_value_is_null(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), "<w:p/>",
+                manifest_overrides={"required_payload_paths": ["meta.product"]},
+            )
+            contract = load_manifest(manifest_path)
+            payload = {"meta": {"product": None}}
+            result = preflight_template(contract, payload, mode="warning")
+            codes = {err["code"] for err in result["errors"]}
+            self.assertIn("INVALID_PAYLOAD_TYPE", codes)
+
+    def test_preflight_flags_missing_required_singleton(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = "<w:p><w:r><w:t>only literal text</w:t></w:r></w:p>"
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), body,
+                manifest_overrides={
+                    "required_payload_paths": [],
+                    "required_singletons": ["{{field.meta.product}}"],
+                },
+            )
+            contract = load_manifest(manifest_path)
+            result = preflight_template(contract, {}, mode="warning")
+            codes = {err["code"] for err in result["errors"]}
+            self.assertIn("MISSING_PLACEHOLDER", codes)
+
+    def test_preflight_detects_placeholder_split_across_runs(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # Word frequently splits a single ``{{field.meta.product}}`` token
+            # across multiple ``w:r``/``w:t`` runs. Preflight must still detect
+            # it after stripping XML tags.
+            body = (
+                "<w:p>"
+                "<w:r><w:t>{{fie</w:t></w:r>"
+                "<w:r><w:t>ld.meta.</w:t></w:r>"
+                "<w:r><w:t>product}}</w:t></w:r>"
+                "</w:p>"
+            )
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), body,
+                manifest_overrides={
+                    "required_payload_paths": [],
+                    "required_singletons": ["{{field.meta.product}}"],
+                },
+            )
+            contract = load_manifest(manifest_path)
+            result = preflight_template(contract, {}, mode="warning")
+            codes = {err["code"] for err in result["errors"]}
+            self.assertNotIn("MISSING_PLACEHOLDER", codes)
+
+    def test_preflight_flags_duplicate_singleton(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = (
+                "<w:p><w:r><w:t>{{field.meta.product}}</w:t></w:r></w:p>"
+                "<w:p><w:r><w:t>{{field.meta.product}}</w:t></w:r></w:p>"
+            )
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), body,
+                manifest_overrides={
+                    "required_payload_paths": [],
+                    "required_singletons": ["{{field.meta.product}}"],
+                },
+            )
+            contract = load_manifest(manifest_path)
+            result = preflight_template(contract, {}, mode="warning")
+            codes = {err["code"] for err in result["errors"]}
+            self.assertIn("DUPLICATE_SINGLETON", codes)
+
+    def test_preflight_flags_invalid_placeholder_kind(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            body = "<w:p><w:r><w:t>{{unknown.kind}}</w:t></w:r></w:p>"
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), body,
+                manifest_overrides={"required_payload_paths": []},
+            )
+            contract = load_manifest(manifest_path)
+            result = preflight_template(contract, {}, mode="warning")
+            codes = {err["code"] for err in result["errors"]}
+            self.assertIn("INVALID_PLACEHOLDER", codes)
+
+    def test_preflight_flags_invalid_chart_mode(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), "<w:p/>",
+                manifest_overrides={
+                    "required_payload_paths": [],
+                    "allowed_chart_modes": {"result_overview_charts": ["image"]},
+                },
+            )
+            contract = load_manifest(manifest_path)
+            payload = {
+                "result_overview_charts": [
+                    {"render_mode": "office"},
+                    {"render_mode": "image"},
+                ],
+            }
+            result = preflight_template(contract, payload, mode="warning")
+            codes = {err["code"] for err in result["errors"]}
+            self.assertIn("INVALID_CHART_MODE", codes)
+
+    def test_preflight_fail_mode_raises(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import (
+            preflight_template,
+            TemplatePreflightError,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp), "<w:p/>",
+                manifest_overrides={"required_payload_paths": ["meta.product"]},
+            )
+            contract = load_manifest(manifest_path)
+            with self.assertRaises(TemplatePreflightError) as ctx:
+                preflight_template(contract, {}, mode="fail")
+            self.assertEqual(ctx.exception.errors[0]["code"], "MISSING_PAYLOAD_PATH")
+
+    def test_preflight_flags_payload_template_type_mismatch(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp),
+                "<w:p/>",
+                manifest_overrides={
+                    "required_payload_paths": [],
+                    "payload_template_types": ["用药体验与疗效反馈"],
+                },
+            )
+            result = preflight_template(
+                load_manifest(manifest_path),
+                {"meta": {"template_type": "依从性与用药习惯"}},
+                mode="warning",
+            )
+            self.assertIn(
+                "TEMPLATE_TYPE_MISMATCH",
+                {error["code"] for error in result["errors"]},
+            )
+
+    def test_preflight_flags_declared_payload_type(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp),
+                "<w:p/>",
+                manifest_overrides={
+                    "required_payload_paths": ["items"],
+                    "payload_path_types": {"items": "list"},
+                },
+            )
+            result = preflight_template(
+                load_manifest(manifest_path),
+                {"items": "not-a-list"},
+                mode="warning",
+            )
+            self.assertIn(
+                "INVALID_PAYLOAD_TYPE",
+                {error["code"] for error in result["errors"]},
+            )
+
+    def test_preflight_flags_missing_required_ooxml_part(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path, _ = self._make_manifest_with_template(
+                Path(tmp),
+                "<w:p/>",
+                manifest_overrides={
+                    "required_payload_paths": [],
+                    "required_parts": ["word/charts/chart1.xml"],
+                },
+            )
+            result = preflight_template(load_manifest(manifest_path), {}, mode="warning")
+            self.assertIn(
+                "MISSING_CHART_PART",
+                {error["code"] for error in result["errors"]},
+            )
+
+    def test_preflight_runs_against_bundled_efficacy_manifest(self) -> None:
+        """The shipped efficacy manifest should preflight clean against a
+        minimally-populated payload while the migration is still in flight."""
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        manifest_path = ROOT / "templates" / "efficacy" / "manifest.json"
+        contract = load_manifest(manifest_path)
+        payload = {
+            "meta": {
+                "product": "测试产品",
+                "region": "测试地区",
+                "template_doc": str(contract.template_path),
+                "template_type": "用药体验与疗效反馈",
+                "survey_period_display": "2026年01月01日-01月31日",
+                "sample_size": 100,
+            },
+            "header_text": "测试报告",
+            "report_title": "测试报告",
+            "service": {
+                "unit": "测试服务商",
+                "date": "2026-01-01",
+            },
+            "preface": ["p1", "p2"],
+            "project_background": ["b1", "b2"],
+            "project_execution": {"lines": ["line"]},
+            "questionnaire_note": {
+                "intro": "intro",
+                "items": ["item"],
+                "closing": "closing",
+            },
+            "result_analysis": {
+                "intro": ["intro"],
+                "overview_charts": [
+                    {"render_mode": "image"},
+                    {"render_mode": "image"},
+                ],
+                "sections": [{"subtopics": ["item"]}],
+            },
+            "summary": {
+                "overall_analysis": ["overall"],
+                "recommendations": ["recommendation"],
+                "key_issue_items": [{"paragraph": "key issue"}],
+            },
+            "attachments": {
+                "attachment1_name": "测试问卷",
+                "attachment1_questions": [{"question": "q"}],
+                "attachment2_name": "问卷调查明细表",
+            },
+            "disclaimer": {"items": ["item"]},
+        }
+        result = preflight_template(contract, payload, mode="warning")
+        # The bundled template contains Task 5 fields plus Task 6 block
+        # singletons and must preflight clean for a complete minimal payload.
+        self.assertEqual(result["status"], "ok", msg=result)
+        self.assertEqual(result["metrics"]["distinct_placeholders"], 24)
+
+
+class TemplateEngineTest(unittest.TestCase):
+    """Cover Task 4: scripts/template_engine.py cross-run replacement."""
+
+    W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+    def _p_from_xml(self, body_xml: str):
+        """Parse a fragment such as ``<w:p>...</w:p>`` into an lxml element.
+
+        We use lxml here (not stdlib ElementTree) because the production
+        primitives append OxmlElement instances which are lxml-based; mixing
+        the two element trees raises TypeError when the engine inserts a
+        new ``w:t`` into a stdlib parent.
+        """
+        from lxml import etree
+
+        wrapped = (
+            f"<w:document xmlns:w='{self.W}' xmlns:a='http://schemas.openxmlformats.org/drawingml/2006/main' xmlns:wp='http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'>"
+            f"<w:body>{body_xml}</w:body></w:document>"
+        )
+        root = etree.fromstring(wrapped.encode("utf-8"))
+        body = root.find(f"{{{self.W}}}body")
+        return body[0]
+
+    def _text_of(self, p_element) -> str:
+        return "".join(
+            (t.text or "")
+            for t in p_element.findall(f".//{{{self.W}}}t")
+        )
+
+    def test_get_paragraph_text_concatenates_runs(self) -> None:
+        from scripts.template_engine import get_paragraph_text
+
+        p = self._p_from_xml(
+            "<w:p>"
+            "<w:r><w:t>Hello </w:t></w:r>"
+            "<w:r><w:t>world</w:t></w:r>"
+            "</w:p>"
+        )
+        self.assertEqual(get_paragraph_text(p), "Hello world")
+
+    def test_replace_text_across_runs_handles_split_placeholder(self) -> None:
+        from scripts.template_engine import replace_text_across_runs
+
+        p = self._p_from_xml(
+            "<w:p>"
+            "<w:r><w:t>{{fie</w:t></w:r>"
+            "<w:r><w:t>ld.meta.</w:t></w:r>"
+            "<w:r><w:t>product}}</w:t></w:r>"
+            "</w:p>"
+        )
+        replaced = replace_text_across_runs(p, "{{field.meta.product}}", "心达康")
+        self.assertTrue(replaced)
+        self.assertEqual(self._text_of(p), "心达康")
+
+    def test_replace_text_across_runs_preserves_first_run_style(self) -> None:
+        from scripts.template_engine import replace_text_across_runs
+
+        p = self._p_from_xml(
+            "<w:p>"
+            "<w:r><w:rPr><w:b/></w:rPr><w:t>{{fie</w:t></w:r>"
+            "<w:r><w:t>ld.meta.product}}</w:t></w:r>"
+            "</w:p>"
+        )
+        replace_text_across_runs(p, "{{field.meta.product}}", "心达康")
+        first_run = p.findall(f"{{{self.W}}}r")[0]
+        rpr = first_run.find(f"{{{self.W}}}rPr")
+        self.assertIsNotNone(rpr, "first run rPr must survive replacement")
+        self.assertIsNotNone(rpr.find(f"{{{self.W}}}b"), "bold must survive replacement")
+
+    def test_replace_text_across_runs_returns_false_when_token_absent(self) -> None:
+        from scripts.template_engine import replace_text_across_runs
+
+        p = self._p_from_xml("<w:p><w:r><w:t>plain text</w:t></w:r></w:p>")
+        self.assertFalse(replace_text_across_runs(p, "{{missing}}", "x"))
+        self.assertEqual(self._text_of(p), "plain text")
+
+    def test_safe_replace_in_paragraph_keeps_drawing_intact(self) -> None:
+        from scripts.template_engine import safe_replace_in_paragraph, paragraph_has_drawing
+
+        p = self._p_from_xml(
+            "<w:p>"
+            "<w:r><w:t>before {{token}} after</w:t></w:r>"
+            "<w:r><w:drawing><wp:inline xmlns:wp='http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'/></w:drawing></w:r>"
+            "</w:p>"
+        )
+        self.assertTrue(paragraph_has_drawing(p))
+        safe_replace_in_paragraph(p, "{{token}}", "REPLACED")
+        # Drawing element must still be present.
+        drawings = p.findall(f".//{{{self.W}}}drawing")
+        self.assertEqual(len(drawings), 1, "drawing element must survive replacement")
+        # Replacement must have happened in the text run.
+        text_runs = [
+            r for r in p.findall(f"{{{self.W}}}r")
+            if r.find(f"{{{self.W}}}drawing") is None
+        ]
+        joined = "".join(
+            (t.text or "")
+            for r in text_runs
+            for t in r.findall(f"{{{self.W}}}t")
+        )
+        self.assertIn("REPLACED", joined)
+        self.assertNotIn("{{token}}", joined)
+
+    def test_safe_replace_in_paragraph_falls_back_to_simple_when_no_drawing(self) -> None:
+        from scripts.template_engine import safe_replace_in_paragraph
+
+        p = self._p_from_xml(
+            "<w:p>"
+            "<w:r><w:t>before {{token}} </w:t></w:r>"
+            "<w:r><w:t>after</w:t></w:r>"
+            "</w:p>"
+        )
+        safe_replace_in_paragraph(p, "{{token}}", "REPLACED")
+        self.assertEqual(self._text_of(p), "before REPLACED after")
+
+    def test_overwrite_paragraph_text_preserves_first_run_style(self) -> None:
+        from scripts.template_engine import overwrite_paragraph_text_preserve_run_style
+
+        p = self._p_from_xml(
+            "<w:p>"
+            "<w:r><w:rPr><w:b/></w:rPr><w:t>old text</w:t></w:r>"
+            "<w:r><w:t>more old</w:t></w:r>"
+            "</w:p>"
+        )
+        overwrite_paragraph_text_preserve_run_style(p, "fresh content")
+        self.assertEqual(self._text_of(p), "fresh content")
+        rpr = p.findall(f"{{{self.W}}}r")[0].find(f"{{{self.W}}}rPr")
+        self.assertIsNotNone(rpr.find(f"{{{self.W}}}b"))
+
+    def test_set_run_text_creates_t_when_missing(self) -> None:
+        from scripts.template_engine import set_run_text
+
+        p = self._p_from_xml("<w:p><w:r><w:rPr/></w:r></w:p>")
+        run = p.find(f"{{{self.W}}}r")
+        set_run_text(run, "injected")
+        ts = run.findall(f"{{{self.W}}}t")
+        self.assertEqual(len(ts), 1)
+        self.assertEqual(ts[0].text, "injected")
+        self.assertEqual(ts[0].get(f"{{http://www.w3.org/XML/1998/namespace}}space"), "preserve")
+
+    def test_replace_in_paragraph_with_no_drawing_table_cell_pattern(self) -> None:
+        """Multiple placeholders in one paragraph - common in 4.x tables."""
+        from scripts.template_engine import replace_text_across_runs
+
+        p = self._p_from_xml(
+            "<w:p>"
+            "<w:r><w:t>调研时间：{{field.meta.survey_period}}</w:t></w:r>"
+            "</w:p>"
+        )
+        replace_text_across_runs(p, "{{field.meta.survey_period}}", "2025年11月1日-11月30日")
+        self.assertEqual(self._text_of(p), "调研时间：2025年11月1日-11月30日")
+
+    def test_bookmark_body_range_finds_multi_paragraph_boundary(self) -> None:
+        from lxml import etree
+        from scripts.template_engine import bookmark_body_range
+
+        xml = (
+            f"<w:document xmlns:w='{self.W}'><w:body>"
+            "<w:p><w:bookmarkStart w:id='41' w:name='tpl_items'/><w:r><w:t>start</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>middle</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>end</w:t></w:r><w:bookmarkEnd w:id='41'/></w:p>"
+            "</w:body></w:document>"
+        )
+        root = etree.fromstring(xml.encode("utf-8"))
+        body = root.find(f"{{{self.W}}}body")
+        self.assertEqual(bookmark_body_range(body, "tpl_items"), (0, 2))
+
+
+class FieldPlaceholderTemplateTest(unittest.TestCase):
+    """Cover Task 5: the bundled docx now carries six {{field.*}} placeholders.
+
+    These tests assert *both* that the template was modified as expected and
+    that the renderer's new ``_apply_field_placeholders`` pass replaces the
+    tokens before any legacy substring substitutions run.
+    """
+
+    EXPECTED_TOKENS = (
+        "{{field.meta.product}}",
+        "{{field.meta.region}}",
+        "{{field.meta.survey_period_display}}",
+        "{{field.meta.sample_size}}",
+        "{{field.report_title}}",
+        "{{field.header_text}}",
+        "{{field.service.unit}}",
+        "{{field.service.date}}",
+        "{{field.attachments.attachment1_name}}",
+        "{{field.attachments.attachment2_name}}",
+        "{{field.attachments.attachment2_filename}}",
+    )
+
+    def test_bundled_template_contains_all_field_placeholders(self) -> None:
+        from scripts.template_preflight import scan_template_placeholders
+
+        template_path = ROOT / "templates" / "efficacy-report-template.docx"
+        occurrences = scan_template_placeholders(template_path)
+        for token in self.EXPECTED_TOKENS:
+            with self.subTest(token=token):
+                self.assertIn(token, occurrences,
+                              f"{token} not present in {template_path.name}")
+
+    def test_v0_baseline_template_has_no_placeholders(self) -> None:
+        """Sanity: the pre-migration fixture is preserved unchanged."""
+        from scripts.template_preflight import scan_template_placeholders
+
+        baseline = ROOT / "tests" / "fixtures" / "templates" / "efficacy-report-template-v0.docx"
+        occurrences = scan_template_placeholders(baseline)
+        self.assertEqual(occurrences, {})
+
+    def test_apply_field_placeholders_replaces_all_tokens(self) -> None:
+        from docx.oxml.ns import qn
+        from scripts.render_from_template import TemplateRenderer
+
+        template_path = ROOT / "templates" / "efficacy-report-template.docx"
+        payload = {
+            "meta": {
+                "product": "心达康胶囊",
+                "region": "湖南省",
+                "survey_period_display": "2025年7月1日—7月31日",
+                "sample_size": 1234,
+            },
+            "report_title": "心达康胶囊问卷调研分析报告",
+            "header_text": "心达康胶囊问卷调研分析报告",
+            "service": {
+                "unit": "测试服务商",
+                "date": "2026-02-15",
+            },
+            "attachments": {
+                "attachment1_name": "心达康胶囊患者调查问卷",
+                "attachment2_name": "问卷调查明细表",
+            },
+        }
+        renderer = TemplateRenderer(template_path, payload)
+        replaced = renderer._apply_field_placeholders({
+            "field.meta.product": payload["meta"]["product"],
+            "field.meta.region": payload["meta"]["region"],
+            "field.meta.survey_period_display": payload["meta"]["survey_period_display"],
+            "field.meta.sample_size": str(payload["meta"]["sample_size"]),
+            "field.report_title": payload["report_title"],
+            "field.header_text": payload["header_text"],
+            "field.service.unit": payload["service"]["unit"],
+            "field.service.date": payload["service"]["date"],
+            "field.attachments.attachment1_name": payload["attachments"]["attachment1_name"],
+            "field.attachments.attachment2_name": payload["attachments"]["attachment2_name"],
+            "field.attachments.attachment2_filename": "明细文件",
+        })
+        self.assertGreater(replaced, 0, "expected at least one replacement")
+
+        # After the pass no {{field.*}} tokens may remain anywhere in body.
+        body_text = "".join(
+            (t.text or "")
+            for p in renderer.body.iter(qn("w:p"))
+            for t in p.findall(".//" + qn("w:t"))
+        )
+        for token in self.EXPECTED_TOKENS:
+            self.assertNotIn(token, body_text, f"{token} leaked after render")
+        # And the substituted values should be present.
+        self.assertIn("心达康胶囊", body_text)
+        self.assertIn("湖南省", body_text)
+        self.assertIn("2025年7月1日—7月31日", body_text)
+        self.assertIn("1234", body_text)
+
+
+class BlockPlaceholderTemplateTest(unittest.TestCase):
+    """Cover Task 6: fixed narrative blocks use explicit block anchors."""
+
+    EXPECTED_TOKENS = (
+        "{{block.preface}}",
+        "{{block.project_background}}",
+        "{{block.project_execution}}",
+        "{{block.questionnaire_note}}",
+        "{{block.summary.overall_analysis}}",
+        "{{block.summary.recommendations}}",
+    )
+
+    def test_bundled_template_contains_all_block_placeholders(self) -> None:
+        from scripts.template_preflight import scan_template_placeholders
+
+        template_path = ROOT / "templates" / "efficacy-report-template.docx"
+        occurrences = scan_template_placeholders(template_path)
+        for token in self.EXPECTED_TOKENS:
+            with self.subTest(token=token):
+                self.assertEqual(
+                    len(occurrences.get(token, [])),
+                    1,
+                    f"{token} must appear exactly once",
+                )
+
+    def test_apply_block_placeholder_clones_prototype_and_preserves_style(self) -> None:
+        from docx import Document
+        from docx.oxml.ns import qn
+        from scripts.render_from_template import TemplateRenderer
+
+        with tempfile.TemporaryDirectory() as tmp:
+            template_path = Path(tmp) / "block.docx"
+            doc = Document()
+            prototype = doc.add_paragraph()
+            first = prototype.add_run("{{block.")
+            first.bold = True
+            prototype.add_run("preface}}")
+            doc.add_paragraph("after")
+            doc.save(template_path)
+
+            renderer = TemplateRenderer(template_path, {})
+            count = renderer._apply_block_placeholder(
+                "block.preface",
+                ["第一段", "第二段", "第三段"],
+            )
+
+            self.assertEqual(count, 3)
+            texts = [
+                "".join(t.text or "" for t in child.findall(".//" + qn("w:t")))
+                for child in renderer.body
+                if child.tag == qn("w:p")
+            ]
+            self.assertEqual(texts[:4], ["第一段", "第二段", "第三段", "after"])
+            first_run = renderer.body[0].find(qn("w:r"))
+            self.assertIsNotNone(first_run.find(qn("w:rPr") + "/" + qn("w:b")))
+
+
+class RepeatPlaceholderTemplateTest(unittest.TestCase):
+    """Cover Task 7: attachment and 5.1 repeats have explicit bookmarks."""
+
+    EXPECTED = {
+        "{{repeat.key_issue_items}}": "tpl_key_issue_items",
+        "{{repeat.attachment_questions}}": "tpl_attachment_questions",
+        "{{repeat.result_sections}}": "tpl_result_sections",
+    }
+
+    def test_bundled_template_contains_repeat_tokens_and_bookmarks(self) -> None:
+        from zipfile import ZipFile
+        from lxml import etree
+        from docx.oxml.ns import qn
+        from scripts.template_preflight import scan_template_placeholders
+
+        template_path = ROOT / "templates" / "efficacy-report-template.docx"
+        occurrences = scan_template_placeholders(template_path)
+        with ZipFile(template_path) as zipped:
+            root = etree.fromstring(zipped.read("word/document.xml"))
+        bookmark_names = {
+            node.get(qn("w:name"))
+            for node in root.findall(".//" + qn("w:bookmarkStart"))
+        }
+        for token, bookmark in self.EXPECTED.items():
+            with self.subTest(token=token):
+                self.assertEqual(len(occurrences.get(token, [])), 1)
+                self.assertIn(bookmark, bookmark_names)
+
+    def test_preflight_rejects_missing_repeat_bookmark(self) -> None:
+        from scripts.template_contract import load_manifest
+        from scripts.template_preflight import preflight_template
+
+        helper = TemplatePreflightTest()
+        with tempfile.TemporaryDirectory() as tmp:
+            body = "<w:p><w:r><w:t>{{repeat.items}}</w:t></w:r></w:p>"
+            manifest_path, _ = helper._make_manifest_with_template(
+                Path(tmp),
+                body,
+                manifest_overrides={
+                    "required_payload_paths": [],
+                    "required_singletons": ["{{repeat.items}}"],
+                    "repeat_bookmarks": {
+                        "{{repeat.items}}": "tpl_items",
+                    },
+                },
+            )
+            contract = load_manifest(manifest_path)
+            result = preflight_template(contract, {}, mode="warning")
+            self.assertIn(
+                "MISSING_BLOCK_BOUNDARY",
+                {error["code"] for error in result["errors"]},
+            )
+
+    def test_result_section_repeat_clones_single_prototype(self) -> None:
+        from docx import Document
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from scripts.render_from_template import TemplateRenderer
+
+        with tempfile.TemporaryDirectory() as tmp:
+            template_path = Path(tmp) / "result-repeat.docx"
+            doc = Document()
+            anchor = doc.add_paragraph("{{repeat.result_sections}}")
+            start = OxmlElement("w:bookmarkStart")
+            start.set(qn("w:id"), "61")
+            start.set(qn("w:name"), "tpl_result_sections")
+            anchor._p.insert(0, start)
+            doc.add_paragraph("4.1原型", style="Heading 2")
+            doc.add_paragraph("原型小标题", style="Heading 3")
+            analysis = doc.add_paragraph("原型分析")
+            end = OxmlElement("w:bookmarkEnd")
+            end.set(qn("w:id"), "61")
+            analysis._p.append(end)
+            doc.save(template_path)
+
+            sections = [
+                {
+                    "section_number": f"4.{index}",
+                    "section_title": f"维度{index}",
+                    "visual_groups": [],
+                    "subtopics": [
+                        {
+                            "subtitle": f"问题{index}分析",
+                            "question_refs": [],
+                            "paragraphs": [f"第{index}段分析"],
+                        }
+                    ],
+                }
+                for index in range(1, 4)
+            ]
+            renderer = TemplateRenderer(
+                template_path,
+                {"result_analysis": {"sections": sections}},
+            )
+            renderer.replace_analysis_sections()
+            texts = [
+                "".join(t.text or "" for t in paragraph.findall(".//" + qn("w:t"))).strip()
+                for paragraph in renderer.body
+                if paragraph.tag == qn("w:p")
+            ]
+            self.assertEqual(
+                [text for text in texts if text.startswith("4.")],
+                ["4.1 维度1", "4.2 维度2", "4.3 维度3"],
+            )
+            self.assertNotIn("{{repeat.result_sections}}", texts)
+
+
+class TemplateCleanupTest(unittest.TestCase):
+    """Cover Task 9 cleanup gates."""
+
+    def test_bundled_template_contains_overview_media_anchors(self) -> None:
+        from scripts.template_preflight import scan_template_placeholders
+
+        occurrences = scan_template_placeholders(
+            ROOT / "templates" / "efficacy-report-template.docx"
+        )
+        self.assertEqual(len(occurrences.get("{{media.overview_pie}}", [])), 1)
+        self.assertEqual(len(occurrences.get("{{media.overview_bar}}", [])), 1)
+
+    def test_renderer_no_longer_contains_legacy_business_locators(self) -> None:
+        source = (ROOT / "scripts" / "render_from_template.py").read_text(encoding="utf-8")
+        self.assertNotIn("self.body[24]", source)
+        self.assertNotIn('replacements["广东省"]', source)
+        self.assertNotIn('replacements["厄贝沙坦氢氯噻嗪片"]', source)
+        self.assertNotIn("def _global_replace_in_xml", source)
+
+
+class TaskUnitHelpersTest(unittest.TestCase):
+    """Cover task-unit JSON I/O helpers used by parallel orchestration."""
+
+    def test_save_and_load_task_unit(self) -> None:
+        from scripts.run_report_pipeline import save_task_unit, load_task_results
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            save_task_unit(run_dir, "chapter4-batch-1", "q01", "分析正文第一题")
+            save_task_unit(run_dir, "chapter4-batch-1", "q02", "分析正文第二题")
+
+            results = load_task_results(run_dir, "chapter4-batch-1")
+            self.assertEqual(results["q01"], "分析正文第一题")
+            self.assertEqual(results["q02"], "分析正文第二题")
+
+    def test_load_task_results_returns_empty_for_missing_task(self) -> None:
+        from scripts.run_report_pipeline import load_task_results
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results = load_task_results(Path(tmp), "nonexistent")
+            self.assertEqual(results, {})
+
+    def test_save_task_unit_creates_tasks_directory(self) -> None:
+        from scripts.run_report_pipeline import save_task_unit
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            self.assertFalse((run_dir / "tasks").exists())
+            save_task_unit(run_dir, "task-1", "q01", "正文")
+            self.assertTrue((run_dir / "tasks").exists())
+            self.assertTrue((run_dir / "tasks" / "task-1.json").exists())
+
+    def test_concurrent_saves_to_same_task_preserve_every_unit(self) -> None:
+        from scripts.run_report_pipeline import load_task_results, save_task_unit
+
+        unit_count = 32
+        start = threading.Barrier(unit_count)
+
+        def save(index: int) -> None:
+            start.wait()
+            save_task_unit(run_dir, "summary-key-issue", f"unit-{index}", f"正文-{index}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=unit_count) as executor:
+                list(executor.map(save, range(unit_count)))
+
+            results = load_task_results(run_dir, "summary-key-issue")
+            self.assertEqual(len(results), unit_count)
+            for index in range(unit_count):
+                self.assertEqual(results[f"unit-{index}"], f"正文-{index}")
+
+
+class PreflightErrorMessageFormatTest(unittest.TestCase):
+    """Verify that preflight error messages follow the 实际值/期望值/修改方法 format."""
+
+    def test_4x_short_paragraph_error_contains_actual_and_expected(self) -> None:
+        from scripts.build_payload import require_ai_analysis_paragraphs
+
+        with self.assertRaises(ValueError) as ctx:
+            require_ai_analysis_paragraphs(
+                ["过短的正文。"],
+                section_number="4.1",
+                question_ref="q01",
+                subtitle="血压控制效果分析",
+            )
+        msg = str(ctx.exception)
+        self.assertIn("4.1 / q01 / 血压控制效果分析", msg)
+        self.assertIn("字", msg)
+        self.assertIn("250", msg)
+
+    def test_4x_extra_paragraphs_error_contains_actual_count(self) -> None:
+        from scripts.build_payload import require_ai_analysis_paragraphs
+
+        with self.assertRaises(ValueError) as ctx:
+            require_ai_analysis_paragraphs(
+                ["第一段内容。", "第二段内容。"],
+                section_number="4.2",
+                question_ref="q03",
+                subtitle="用药行为分析",
+            )
+        msg = str(ctx.exception)
+        self.assertIn("4.2 / q03 / 用药行为分析", msg)
+        self.assertIn("2", msg)
+        self.assertIn("1", msg)
+
+    def test_4x_rejects_overlong_sentence(self) -> None:
+        from scripts.build_payload import require_ai_analysis_paragraphs
+
+        paragraph = (
+            "数据显示39.13%的患者能够按照既定方案完成日常管理，说明主流反馈已经形成较稳定的执行基础，"
+            "患者对相关要求的理解、记录、复诊沟通和风险识别均表现出一定一致性，且在不同生活场景下仍能"
+            "维持相对连续的行为节奏，但少数人面对工作变化、外出安排和信息不足时可能出现执行松动，"
+            "需要结合个体情况持续观察并及时解释。"
+            "其余反馈显示少数患者仍存在理解偏差。"
+            "后续需通过随访沟通巩固已有基础，并针对波动人群补充清晰的执行提示和记录工具，"
+            "使患者能够在不同场景中保持稳定行为，同时结合家庭支持和复诊计划持续评估执行变化与实际效果。"
+        )
+        self.assertGreaterEqual(len(paragraph), 250)
+        self.assertLessEqual(len(paragraph), 300)
+
+        with self.assertRaisesRegex(ValueError, "单句"):
+            require_ai_analysis_paragraphs(
+                [paragraph],
+                section_number="4.1",
+                question_ref="q01",
+                subtitle="血压控制效果分析",
+            )
+
+    def test_4x_rejects_redundant_stock_closing(self) -> None:
+        from scripts.build_payload import require_ai_analysis_paragraphs
+
+        paragraph = (
+            "数据显示39.13%的患者已形成稳定执行基础，说明当前管理要求能够被多数人理解并落实。"
+            "少数患者仍会受到生活节奏、信息来源和复诊衔接影响，需要结合真实场景继续观察。"
+            "后续需通过随访表和沟通记录识别波动人群，并补充清晰的解释材料，使既有认知转化为连续行动。"
+            "该维度的反馈表现良好且后续优化方向明确可操作。"
+            "该维度的反馈表现良好且后续优化方向明确可操作。"
+            "同时还要结合患者年龄、既往经验和家庭支持差异安排分层沟通，确保关键要求能够被准确理解并长期执行，"
+            "并通过复诊反馈持续校正支持内容，形成记录、解释和跟踪相互衔接的管理闭环。"
+        )
+        self.assertGreaterEqual(len(paragraph), 250)
+        self.assertLessEqual(len(paragraph), 300)
+
+        with self.assertRaisesRegex(ValueError, "重复|套话"):
+            require_ai_analysis_paragraphs(
+                [paragraph],
+                section_number="4.1",
+                question_ref="q01",
+                subtitle="血压控制效果分析",
+            )
+
+    def test_5_1_error_preserves_analytical_judgment_phrase(self) -> None:
+        from scripts.build_payload import choose_key_issue_analysis
+
+        # Paragraph is correct length (250-350 chars) but lacks analytical judgment word
+        # Use a long enough string that doesn't contain 说明/表明/反映/提示/判断
+        bad_para = "A" * 300
+        with self.assertRaises(ValueError) as ctx:
+            choose_key_issue_analysis([bad_para], 1)
+        msg = str(ctx.exception)
+        self.assertIn("analytical judgment", msg)
+
+    def test_5_3_error_preserves_concrete_tools_phrase(self) -> None:
+        from scripts.build_payload import choose_recommendations
+
+        # Intro is valid (40-120 chars, has 基于 and 建议)
+        # Items are 80-180 chars, have target keywords (针对/围绕), but no carrier keywords
+        # Total must be 300-600 chars to reach the carrier check
+        bad_recs = [
+            "基于本次调研结果，为进一步优化患者管理并解决当前存在的重点问题，加强患者支持服务和持续改进工作，提升整体服务水平并加强管理能力，提出以下建议。",
+            "1. 针对患者用药执行不稳定的问题，应持续完善干预方式并明确执行步骤，帮助患者理解规范用药的重要性，形成长期稳定习惯并提升整体管理质量，同时优化后续服务流程和复诊沟通机制，为后续患者管理提供更全面的参考依据和执行标准，持续改进患者服务体验。",
+            "2. 围绕血压监测不规律的问题，应加强监测频率和复诊沟通的管理，帮助患者形成规律监测习惯，优化治疗方案的执行效果，为后续患者管理提供更全面的数据支持和决策参考，提升整体服务质量水平和管理效率，同时优化患者体验和满意度评价。",
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            choose_recommendations(bad_recs, [])
+        msg = str(ctx.exception)
+        self.assertTrue("concrete tools or carriers" in msg or "载体" in msg)
 
 
 if __name__ == "__main__":

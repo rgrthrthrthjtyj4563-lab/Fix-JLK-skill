@@ -12,7 +12,6 @@
 9. `调研结果`
 10. `附件1`
 11. `附件2`
-12. `免责申明`
 
 ## Preface
 - Must be exactly `2` paragraphs.
@@ -35,7 +34,7 @@
 - `用药体验与疗效反馈` must expose exactly `7` dimensions in `4.1-4.7`.
 - `问卷结果分析` must include two overview charts before `4.1`: `维度占比饼状图` and `维度横向柱形图`.
 - Both overview charts must use the same ordered categories and values, derived from the number of questions grouped into each `4.x` dimension.
-- The first overview chart must remain an Office-native pie chart.
+- The first overview chart must render as a PNG pie chart with a legend.
 - The second overview chart must render as a PNG horizontal bar chart with integer dimension question counts, not percentages.
 - The second overview chart must not display a legend or percentage labels; show only dimension names, integer axis ticks, and bar-end count labels.
 - Each `4.x` section must contain: section intro, then for each question: subtitle (no index prefix like `(1)`), result table, and one analysis paragraph.

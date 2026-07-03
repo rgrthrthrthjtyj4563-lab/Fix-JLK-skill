@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "template_id": "efficacy-v1",
+  "template_type": "patient-questionnaire-report",
+  "template_file": "../efficacy-report-template.docx",
+  "renderer": "scripts.render_from_template:TemplateRenderer",
+  "description": "Patient questionnaire report bundled template used for both efficacy and adherence themes.",
+  "payload_template_types": [
+    "用药体验与疗效反馈",
+    "依从性与用药习惯"
+  ],
+  "required_payload_paths": [
+    "meta.product",
+    "meta.region",
+    "meta.template_doc",
+    "meta.template_type",
+    "meta.survey_period_display",
+    "meta.sample_size",
+    "header_text",
+    "report_title",
+    "service.unit",
+    "service.date",
+    "preface",
+    "project_background",
+    "project_execution.lines",
+    "questionnaire_note.intro",
+    "questionnaire_note.items",
+    "questionnaire_note.closing",
+    "result_analysis.intro",
+    "result_analysis.overview_charts",
+    "result_analysis.sections",
+    "summary.overall_analysis",
+    "summary.recommendations",
+    "summary.key_issue_items",
+    "attachments.attachment1_name",
+    "attachments.attachment1_questions",
+    "attachments.attachment2_name"
+  ],
+  "payload_path_types": {
+    "preface": "list",
+    "project_background": "list",
+    "project_execution.lines": "list",
+    "questionnaire_note.items": "list",
+    "result_analysis.intro": "list",
+    "result_analysis.overview_charts": "list",
+    "result_analysis.sections": "list",
+    "summary.overall_analysis": "list",
+    "summary.recommendations": "list",
+    "summary.key_issue_items": "list",
+    "attachments.attachment1_questions": "list"
+  },
+  "required_singletons": [
+    "{{block.preface}}",
+    "{{block.project_background}}",
+    "{{block.project_execution}}",
+    "{{block.questionnaire_note}}",
+    "{{block.result_analysis.intro}}",
+    "{{block.summary.overall_analysis}}",
+    "{{block.summary.recommendations}}",
+    "{{repeat.key_issue_items}}",
+    "{{repeat.attachment_questions}}",
+    "{{repeat.result_sections}}",
+    "{{media.overview_pie}}",
+    "{{media.overview_bar}}"
+  ],
+  "optional_singletons": [],
+  "field_placeholders": [
+    "{{field.meta.product}}",
+    "{{field.meta.region}}",
+    "{{field.meta.survey_period_display}}",
+    "{{field.meta.sample_size}}",
+    "{{field.report_title}}",
+    "{{field.header_text}}",
+    "{{field.service.unit}}",
+    "{{field.service.date}}",
+    "{{field.attachments.attachment1_name}}",
+    "{{field.attachments.attachment2_name}}",
+    "{{field.attachments.attachment2_filename}}"
+  ],
+  "repeat_bookmarks": {
+    "{{repeat.key_issue_items}}": "tpl_key_issue_items",
+    "{{repeat.attachment_questions}}": "tpl_attachment_questions",
+    "{{repeat.result_sections}}": "tpl_result_sections"
+  },
+  "required_parts": [
+    "word/charts/chart1.xml",
+    "word/charts/chart2.xml",
+    "word/charts/_rels/chart1.xml.rels",
+    "word/charts/_rels/chart2.xml.rels",
+    "word/embeddings/Workbook1.xlsx",
+    "word/embeddings/Workbook2.xlsx"
+  ],
+  "allowed_chart_modes": {
+    "result_analysis.overview_charts": ["image"]
+  },
+  "notes": [
+    "Chapter-4 overview charts render as two PNG drawings.",
+    "Section 5.1 renders two native Office 3D pie charts from the required chart prototype parts."
+  ]
+}

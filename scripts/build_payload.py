@@ -165,6 +165,23 @@ def normalize_pct(text: str) -> str:
     return f"{float(value):.2f}%"
 
 
+def normalize_chinese_quotes(text: str) -> str:
+    """Convert paired ASCII double quotes in reader-visible Chinese text."""
+    return re.sub(r'"([^"\r\n]+)"', r'“\1”', str(text or ""))
+
+
+def normalize_payload_typography(value):
+    if isinstance(value, dict):
+        return {key: normalize_payload_typography(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [normalize_payload_typography(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(normalize_payload_typography(item) for item in value)
+    if isinstance(value, str):
+        return normalize_chinese_quotes(value)
+    return value
+
+
 def split_front_matter(text: str) -> tuple[dict, str]:
     stripped = text.lstrip("\ufeff")
     match = re.match(r"^\s*---\s*\n(.*?)\n\s*---\s*\n?(.*)$", stripped, flags=re.DOTALL)
@@ -310,12 +327,22 @@ def strip_markdown_heading_prefix(text: str) -> str:
     return re.sub(r"^\s{0,3}#{1,6}\s*", "", str(text).strip())
 
 
+def normalize_subtopic_title(text: str) -> str:
+    """Return the semantic subtitle without numbering or internal question refs."""
+    normalized = normalize_space(strip_markdown_heading_prefix(text))
+    normalized = re.sub(r"^[（(]\d+[）)]\s*", "", normalized)
+    normalized = re.sub(r"^\d+(?:\.\d+){1,}\s*", "", normalized)
+    normalized = re.sub(r"\s*(?:[-—–－_]{1,2}\s*)?q\d+\s*$", "", normalized, flags=re.IGNORECASE)
+    return normalized.strip(" \t-—–－_")
+
+
 def parse_markdown_content(path: Path) -> tuple[dict, dict]:
     meta, body = split_front_matter(path.read_text(encoding="utf-8"))
     lines = body.splitlines()
     current_section: str | None = None
     current_result_section: dict | None = None
     current_subtopic: dict | None = None
+    format_errors: list[str] = []
 
     sections = {
         "preface": [],
@@ -347,6 +374,13 @@ def parse_markdown_content(path: Path) -> tuple[dict, dict]:
         current_result_section = None
 
     for line in lines:
+        level_one_heading = re.match(r"^#\s+(.+?)\s*$", line.lstrip())
+        if level_one_heading:
+            format_errors.append(
+                f"Unsupported level-1 heading '# {normalize_space(level_one_heading.group(1))}': "
+                "use ## for a top-level report section."
+            )
+            continue
         heading = re.match(r"^(#{2,5})\s+(.+?)\s*$", line.lstrip())
         if heading:
             level = len(heading.group(1))
@@ -384,6 +418,8 @@ def parse_markdown_content(path: Path) -> tuple[dict, dict]:
                 section_title = title[len(section_number):].strip()
                 current_result_section = {
                     "title": title,
+                    "source_heading": title,
+                    "heading_level": level,
                     "section_number": section_number,
                     "section_title": section_title,
                     "lines": [],
@@ -393,7 +429,11 @@ def parse_markdown_content(path: Path) -> tuple[dict, dict]:
             if level >= 4 and current_result_section:
                 flush_subtopic()
                 current_section = "result_analysis"
-                current_subtopic = {"title": title, "lines": [], "subtitle": re.sub(r"^（\d+）\s*", "", title).strip()}
+                current_subtopic = {
+                    "title": title,
+                    "lines": [],
+                    "subtitle": normalize_subtopic_title(title),
+                }
                 continue
             if re.match(r"5\.1", title):
                 flush_result_section()
@@ -423,6 +463,7 @@ def parse_markdown_content(path: Path) -> tuple[dict, dict]:
         "questionnaire_note": parse_paragraphs(sections["questionnaire_note"]),
         "result_analysis_intro": parse_paragraphs(sections["result_analysis_intro"]),
         "result_analysis": sections["result_analysis"],
+        "_format_errors": format_errors,
         "summary": {
             "key_issue_analysis": parse_paragraphs(sections["key_issue_analysis"]),
             "overall_analysis": parse_paragraphs(sections["overall_analysis"]),
@@ -638,6 +679,39 @@ def choose_analysis_paragraphs(content: list[str], fallback: list[str]) -> list[
     return fallback
 
 
+MAX_PROSE_SENTENCE_CHARS = 110
+FORBIDDEN_STOCK_CLOSINGS = (
+    "该维度的反馈表现良好且后续优化方向明确可操作",
+    "后续优化方向明确可操作",
+)
+
+
+def prose_quality_issues(text: str, max_sentence_chars: int = MAX_PROSE_SENTENCE_CHARS) -> list[str]:
+    """Detect readability and redundant-closing defects in AI-authored prose."""
+    normalized = normalize_space(text)
+    issues: list[str] = []
+    sentences = [
+        sentence.strip(" ，,、")
+        for sentence in re.split(r"[。！？!?；;]+", normalized)
+        if sentence.strip(" ，,、")
+    ]
+    longest = max((len(sentence) for sentence in sentences), default=0)
+    if longest > max_sentence_chars:
+        issues.append(
+            f"存在 {longest} 字超长单句，单句不得超过 {max_sentence_chars} 字；"
+            "请拆分为结论、解释和收束句。"
+        )
+    if re.search(r"[，。！？；、,.!?;]{2,}", normalized):
+        issues.append("存在连续或多余标点；请清理重复标点。")
+    if any(phrase in normalized for phrase in FORBIDDEN_STOCK_CLOSINGS):
+        issues.append("结尾包含通用套话；请改为与本题数据直接对应的收束判断。")
+
+    canonical = [re.sub(r"[\s，,、]+", "", sentence) for sentence in sentences]
+    if len(canonical) != len(set(canonical)):
+        issues.append("段内存在重复句；请删除语义雷同的结尾或合并重复判断。")
+    return issues
+
+
 def require_ai_analysis_paragraphs(
     content: list[str],
     section_number: str,
@@ -648,6 +722,7 @@ def require_ai_analysis_paragraphs(
 
     Raises ValueError with diagnostic info if AI text is missing or invalid,
     instead of silently falling back to programmatic text.
+    Error message format: "章节 / 题号 / 小标题：实际值；期望值；修改方法"
     """
     try:
         from expression_data import (
@@ -669,33 +744,50 @@ def require_ai_analysis_paragraphs(
     normalized = sanitize_body_paragraphs(content)
     if not normalized:
         raise ValueError(
-            f"{section_number} / {question_ref} / {subtitle} "
-            "缺少 AI 分析正文"
+            f"{section_number} / {question_ref} / {subtitle}："
+            "缺少 AI 分析正文；需要恰好 1 段 250-300 字正文；"
+            "请补充完整的分析正文。"
         )
     if len(normalized) != 1:
         raise ValueError(
-            f"{section_number} / {question_ref} / {subtitle} "
-            f"AI 分析正文应为 1 段，实际 {len(normalized)} 段"
+            f"{section_number} / {question_ref} / {subtitle}："
+            f"实际 {len(normalized)} 段；需要恰好 1 段；"
+            "请将多段内容合并为 1 段。"
         )
     text = normalized[0]
-    if not ed_is_complete(text):
-        # Provide specific diagnostics
-        diagnostics = []
-        if len(text) < ED_MIN:
-            diagnostics.append(f"字数不足({len(text)}<{ED_MIN})")
-        if len(text) > ED_MAX:
-            diagnostics.append(f"字数超标({len(text)}>{ED_MAX})")
+    # Internal-ref guard: q\d+ and "第N段" must not appear in 4.x body text.
+    try:
+        from ._internal_ref_guard import assert_clean_body_text
+    except ImportError:  # script-mode fallback
+        from _internal_ref_guard import assert_clean_body_text
+    assert_clean_body_text(text, location=f"{section_number} / {question_ref} / {subtitle}")
+    char_count = len(text)
+    prose_issues = prose_quality_issues(text)
+    if not ed_is_complete(text) or prose_issues:
+        # Provide specific diagnostics following "章节/题号/小标题：实际值；期望值；修改方法"
+        issues = []
+        if char_count < ED_MIN:
+            issues.append(
+                f"正文 {char_count} 字，要求 {ED_MIN}-{ED_MAX} 字，"
+                f"还需补充至少 {ED_MIN - char_count} 字。"
+            )
+        if char_count > ED_MAX:
+            issues.append(
+                f"正文 {char_count} 字，要求 {ED_MIN}-{ED_MAX} 字，"
+                f"需删除至少 {char_count - ED_MAX} 字。"
+            )
         if not any(marker in text for marker in ["说明", "表明", "反映", "提示"]):
-            diagnostics.append("缺少分析判断词(说明/表明/反映/提示)")
+            issues.append("缺少分析判断词（需包含说明/表明/反映/提示之一）；请在正文中加入分析判断。")
         if not any(marker in text for marker in ["整体看", "整体来看", "后续", "需", "仍"]):
-            diagnostics.append("缺少收束词(整体看/后续/需/仍)")
+            issues.append("缺少收束词（需包含整体看/后续/需/仍之一）；请在正文结尾加入收束语句。")
         if any(re.search(p, text) for p in ED_FORBIDDEN):
-            diagnostics.append("包含禁用模式(A/B/C/D选项等)")
+            issues.append("包含禁用模式（A/B/C/D 字母选项等）；请改用选项语义表述。")
         if not re.search(_NUMERIC_PERCENT, text):
-            diagnostics.append("缺少数字百分比")
+            issues.append("缺少数字百分比（如 39.13%）；请在正文中标注关键数据的百分比。")
+        issues.extend(prose_issues)
+        detail = "；".join(issues) if issues else "未知原因，请检查格式是否满足全部规则。"
         raise ValueError(
-            f"{section_number} / {question_ref} / {subtitle} "
-            f"AI 分析正文不合格: {'; '.join(diagnostics) if diagnostics else '未知原因'}"
+            f"{section_number} / {question_ref} / {subtitle}：{detail}"
         )
     return normalized
 
@@ -1032,20 +1124,47 @@ def choose_key_issue_analysis(ai_paragraphs: list[str], expected_count: int) -> 
         return []
     if len(paragraphs) != expected_count:
         raise ValueError(
-            f"5.1问卷重点问题分析 must contain exactly {expected_count} AI paragraphs."
+            f"5.1问卷重点问题分析：实际 {len(paragraphs)} 段；"
+            f"需要恰好 {expected_count} 段；"
+            "请按 key_issue_question_refs 对应的题数生成每段分析。"
         )
     for index, paragraph in enumerate(paragraphs, start=1):
         length = len(paragraph)
         if length < MIN_KEY_ISSUE_CHARS or length > MAX_KEY_ISSUE_CHARS:
             raise ValueError(
-                f"5.1问卷重点问题分析 paragraph {index} length must be "
-                f"{MIN_KEY_ISSUE_CHARS}-{MAX_KEY_ISSUE_CHARS} Chinese characters."
+                f"5.1问卷重点问题分析 / 第 {index} 段："
+                f"正文 {length} 字，要求 {MIN_KEY_ISSUE_CHARS}-{MAX_KEY_ISSUE_CHARS} 字；"
+                f"{'还需补充' if length < MIN_KEY_ISSUE_CHARS else '需删除'}至少 "
+                f"{abs(MIN_KEY_ISSUE_CHARS - length) if length < MIN_KEY_ISSUE_CHARS else abs(length - MAX_KEY_ISSUE_CHARS)} 字；"
+                "请调整段落长度。"
             )
         if not any(marker in paragraph for marker in ["说明", "表明", "反映", "提示", "判断"]):
-            raise ValueError(f"5.1问卷重点问题分析 paragraph {index} lacks analytical judgment.")
+            raise ValueError(
+                f"5.1问卷重点问题分析 / 第 {index} 段："
+                "缺少 analytical judgment（需包含说明/表明/反映/提示/判断之一）；"
+                "请在该段加入分析判断。"
+            )
         for pattern in FORBIDDEN_KEY_ISSUE_PATTERNS:
             if re.search(pattern, paragraph):
-                raise ValueError(f"5.1问卷重点问题分析 paragraph {index} contains fixed programmatic wording.")
+                raise ValueError(
+                    f"5.1问卷重点问题分析 / 第 {index} 段："
+                    "contains fixed programmatic wording；"
+                    "请移除程序化固定句式，改用个性化分析。"
+                )
+        # Internal-ref guard: q\d+ and "第N段" must not appear in 5.1 body text.
+        try:
+            from ._internal_ref_guard import assert_clean_body_text
+        except ImportError:
+            from _internal_ref_guard import assert_clean_body_text
+        assert_clean_body_text(
+            paragraph, location=f"5.1问卷重点问题分析 / 第 {index} 段"
+        )
+        issues = prose_quality_issues(paragraph)
+        if issues:
+            raise ValueError(
+                f"5.1问卷重点问题分析 / 第 {index} 段："
+                + "；".join(issues)
+            )
     return paragraphs
 
 
@@ -1058,12 +1177,30 @@ def validate_content_structure(content: dict, grouped: dict) -> None:
         return
 
     drafted_numbers = [section.get("section_number", "") for section in drafted_sections]
+    for section in drafted_sections:
+        source_heading = normalize_space(section.get("source_heading", section.get("title", "")))
+        if section.get("heading_level") == 3 and re.match(r"4\.\d+\.\d+", source_heading):
+            raise ValueError(
+                f"Malformed result-analysis heading '{source_heading}': "
+                "level 3 heading treated as a 4.x section; use #### for a subtopic."
+            )
     if any(number not in expected_by_number for number in drafted_numbers):
-        raise ValueError("AI draft contains result-analysis sections outside the detected template structure.")
+        unexpected = [
+            normalize_space(section.get("source_heading", section.get("title", "")))
+            for section in drafted_sections
+            if section.get("section_number", "") not in expected_by_number
+        ]
+        raise ValueError(
+            "AI draft contains result-analysis sections outside the detected template structure: "
+            + ", ".join(unexpected)
+        )
 
     expected_order = [number for number in expected_numbers if number in drafted_numbers]
     if drafted_numbers != expected_order:
-        raise ValueError("AI draft result-analysis section order conflicts with the detected template structure.")
+        raise ValueError(
+            "AI draft result-analysis section order conflicts with the detected template structure: "
+            f"expected {expected_order}, got {drafted_numbers}."
+        )
 
     for section in drafted_sections:
         expected = expected_by_number[section["section_number"]]
@@ -1199,6 +1336,9 @@ def preflight_report_content(
             record("theme", True)
 
     # ── Chapter presence checks ──
+    for index, message in enumerate(content.get("_format_errors", []), start=1):
+        record(f"markdown_format_{index}", False, str(message))
+
     required_chapters = {
         "preface": "前言",
         "project_background": "项目背景",
@@ -1283,24 +1423,39 @@ def preflight_report_content(
 
     summary = content.get("summary", {})
     key_issue = summary.get("key_issue_analysis", [])
-    record(
-        "key_issue_analysis",
-        bool(key_issue and any(str(p).strip() for p in key_issue)),
-        "缺少 5.1 问卷重点问题分析正文",
-    )
+    key_issue_present = bool(key_issue and any(str(p).strip() for p in key_issue))
+    record("key_issue_analysis", key_issue_present, "缺少 5.1 问卷重点问题分析正文")
+    if key_issue_present:
+        try:
+            choose_key_issue_analysis(key_issue, len(parsed_refs) if parsed_refs else 2)
+            record("key_issue_analysis_quality", True)
+        except ValueError as exc:
+            record("key_issue_analysis_quality", False, str(exc))
 
     overall = summary.get("overall_analysis", [])
-    record(
-        "overall_analysis",
-        bool(overall and any(str(p).strip() for p in overall)),
-        "缺少 5.2 调研结果总结正文",
-    )
+    overall_present = bool(overall and any(str(p).strip() for p in overall))
+    record("overall_analysis", overall_present, "缺少 5.2 调研结果总结正文")
+    if overall_present:
+        try:
+            choose_overall_analysis(
+                overall,
+                [],
+                str(meta.get("product") or meta.get("品种") or ""),
+                str(meta.get("region") or meta.get("地区") or ""),
+            )
+            record("overall_analysis_quality", True)
+        except ValueError as exc:
+            record("overall_analysis_quality", False, str(exc))
 
     recs = summary.get("recommendations", [])
     recs_present = bool(recs and any(str(p).strip() for p in recs))
     record("recommendations", recs_present, "缺少 5.3 建议正文")
-    if recs_present and not any(re.match(r"^\s*\d+\.", str(item).strip()) for item in recs):
-        record("recommendations_numbered_items", False, "5.3 建议缺少编号条目")
+    if recs_present:
+        try:
+            choose_recommendations(recs, [])
+            record("recommendations_quality", True)
+        except ValueError as exc:
+            record("recommendations_quality", False, str(exc))
 
     # ── Cross-check key_issue_question_refs against actual sections ──
     if parsed_refs and grouped:
@@ -1440,29 +1595,59 @@ def choose_overall_analysis(
     normalized = choose_body_paragraphs(ai_paragraphs, [])
     total_len = sum(len(paragraph) for paragraph in normalized)
     if not normalized:
-        raise ValueError("5.2调研结果总结 must be provided by AI draft.")
+        raise ValueError(
+            "5.2调研结果总结：缺少正文；需要 3-5 段，总字数不超过 700 字；请由 AI 生成正文。"
+        )
     if normalized == choose_body_paragraphs(programmatic_reference, []):
-        raise ValueError("5.2调研结果总结 must not use programmatic fallback text.")
+        raise ValueError(
+            "5.2调研结果总结：实际使用了程序兜底文本；需要 AI 独立生成的正文；请提供原创调研结果总结。"
+        )
     if not (3 <= len(normalized) <= 5):
-        raise ValueError("5.2调研结果总结 must contain 3-5 AI paragraphs.")
+        raise ValueError(
+            f"5.2调研结果总结：实际 {len(normalized)} 段；需要 3-5 段；请调整段落数量。"
+        )
     if total_len > 700:
-        raise ValueError("5.2调研结果总结 must not exceed 700 Chinese characters.")
+        raise ValueError(
+            f"5.2调研结果总结：总字数 {total_len} 字；不超过 700 字；请精简内容。"
+        )
     joined = "".join(normalized)
     if product and product not in joined and region and region not in joined:
-        raise ValueError("5.2调研结果总结 must mention the product or region.")
+        raise ValueError(
+            f"5.2调研结果总结：未提及产品 '{product}' 或地区 '{region}'；"
+            "需要在正文中点名品种或地区；请在内容中加入品种或地区名称。"
+        )
     if not any(marker in joined for marker in ["说明", "表明", "反映", "提示", "判断"]):
-        raise ValueError("5.2调研结果总结 lacks analytical judgment.")
+        raise ValueError(
+            "5.2调研结果总结：缺少 analytical judgment（需包含说明/表明/反映/提示/判断之一）；请在正文中加入分析判断词。"
+        )
+    for index, paragraph in enumerate(normalized, start=1):
+        # Internal-ref guard: q\d+ and "第N段" must not appear in 5.2 body text.
+        try:
+            from ._internal_ref_guard import assert_clean_body_text
+        except ImportError:
+            from _internal_ref_guard import assert_clean_body_text
+        assert_clean_body_text(paragraph, location=f"5.2调研结果总结 / 第 {index} 段")
+        issues = prose_quality_issues(paragraph)
+        if issues:
+            raise ValueError(f"5.2调研结果总结 / 第 {index} 段：" + "；".join(issues))
     return normalized
 
 
 def choose_recommendations(ai_paragraphs: list[str], fallback: list[str]) -> list[str]:
     normalized = choose_body_paragraphs(ai_paragraphs, [])
     if not normalized:
-        raise ValueError("5.3建议 must be provided by AI draft.")
+        raise ValueError(
+            "5.3建议：缺少正文；需要 1 段导语 + 2-4 条编号建议，总字数 300-600 字；请由 AI 生成正文。"
+        )
     if normalized == choose_body_paragraphs(fallback, []):
-        raise ValueError("5.3建议 must not use programmatic fallback text.")
+        raise ValueError(
+            "5.3建议：实际使用了程序兜底文本；需要 AI 独立生成的正文；请提供原创建议。"
+        )
     if any("药企方面" in paragraph or "临床层面：" in paragraph or "临床层面:" in paragraph for paragraph in normalized):
-        raise ValueError("5.3建议 contains forbidden template subject wording.")
+        raise ValueError(
+            "5.3建议：包含禁用模板主体（药企方面/临床层面）；"
+            "需要具体方面或机制展开建议；请避免使用主体罗列式模板表达。"
+        )
 
     total_len = sum(len(paragraph) for paragraph in normalized)
     numbered_items = [paragraph for paragraph in normalized if re.match(r"^\d+\.\s*\S+", paragraph)]
@@ -1482,17 +1667,47 @@ def choose_recommendations(ai_paragraphs: list[str], fallback: list[str]) -> lis
     item_carriers_valid = all(any(keyword in item for keyword in carrier_keywords) for item in numbered_items)
 
     if not intro_valid:
-        raise ValueError("5.3建议 intro is invalid.")
+        raise ValueError(
+            f"5.3建议 / 导语：实际 {len(normalized[0])} 字，要求 40-120 字；"
+            "需要以「基于/结合」开头并包含「建议」；请调整导语格式。"
+        )
     if not (2 <= len(numbered_items) <= 4):
-        raise ValueError("5.3建议 must contain 2-4 numbered recommendation items.")
+        raise ValueError(
+            f"5.3建议：实际 {len(numbered_items)} 条编号建议；需要 2-4 条；请调整建议数量。"
+        )
     if not (300 <= total_len <= 600):
-        raise ValueError("5.3建议 total length must be 300-600 Chinese characters.")
+        raise ValueError(
+            f"5.3建议：总字数 {total_len} 字，要求 300-600 字；"
+            f"{'还需补充' if total_len < 300 else '需删除'}至少 "
+            f"{abs(300 - total_len) if total_len < 300 else abs(total_len - 600)} 字；"
+            "请调整内容长度。"
+        )
     if not item_lengths_valid:
-        raise ValueError("5.3建议 numbered items must be 80-180 Chinese characters each.")
+        raise ValueError(
+            "5.3建议：部分建议长度不在 80-180 字范围内；"
+            "请检查每条建议的字数。"
+        )
     if not item_targets_valid:
-        raise ValueError("5.3建议 numbered items must describe target problems or groups.")
+        raise ValueError(
+            "5.3建议：部分建议缺少目标词（需包含针对/围绕/聚焦/面向/建议之一）；"
+            "请在每条建议中明确问题或群体目标。"
+        )
     if not item_carriers_valid:
-        raise ValueError("5.3建议 numbered items must include concrete tools or carriers.")
+        raise ValueError(
+            "5.3建议：部分建议缺少 concrete tools or carriers（需包含提醒卡/药盒/二维码/随访表/患者手册"
+            "/记录表/短视频/沟通群/宣传册/流程单/闹钟/药师/门诊/药店/台账/贴之一）；"
+            "请在每条建议中加入具体的工具或载体。"
+        )
+    for index, paragraph in enumerate(normalized, start=1):
+        # Internal-ref guard: q\d+ and "第N段" must not appear in 5.3 body text.
+        try:
+            from ._internal_ref_guard import assert_clean_body_text
+        except ImportError:
+            from _internal_ref_guard import assert_clean_body_text
+        assert_clean_body_text(paragraph, location=f"5.3建议 / 第 {index} 段")
+        issues = prose_quality_issues(paragraph)
+        if issues:
+            raise ValueError(f"5.3建议 / 第 {index} 段：" + "；".join(issues))
     return normalized
 
 
@@ -1558,7 +1773,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             st_idx = st["subtopic_index"]
             ai_st = ai_st_by_idx.get(st_idx, {})
 
-            subtitle = ai_st.get("subtitle") or st.get("subtitle", "")
+            subtitle = normalize_subtopic_title(ai_st.get("subtitle") or st.get("subtitle", ""))
             question_ref_label = refs[0] if refs else "unknown"
             analysis = require_ai_analysis_paragraphs(
                 ai_st.get("paragraphs", []),
@@ -1665,7 +1880,7 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
         },
     ]
 
-    return {
+    payload = {
         "meta": {
             "product": product,
             "region": region,
@@ -1721,22 +1936,13 @@ def build_payload(questionnaire: dict, meta: dict, content: dict, cli_args: argp
             "attachment1_questions": attachment_questions,
             "attachment2_name": "问卷调查明细表",
         },
-        "disclaimer": {
-            "title": "免责申明",
-            "items": [
-                "（1）本次调研项目以随机选取对象进行面对面调研，本次调研只对本次样本数据负责。",
-                f"（2）承接单位调研项目，是针对{product}这一品种调研，并非指定厂家指定品种。",
-                "（3）本次调研只针对调研区域数据负责，不代表全国调研数据。",
-            ],
-            "unit": cli_args.disclaimer_unit or meta.get("disclaimer_unit") or "北京玖麟空科技有限公司",
-            "date": derive_service_date(survey_period),
-        },
         "chart_map": chart_map,
     }
+    return normalize_payload_typography(payload)
 
 
 def validate_payload(payload: dict) -> None:
-    for key in ["meta", "header_text", "report_title", "preface", "project_background", "project_execution", "questionnaire_note", "result_analysis", "summary", "attachments", "disclaimer"]:
+    for key in ["meta", "header_text", "report_title", "preface", "project_background", "project_execution", "questionnaire_note", "result_analysis", "summary", "attachments"]:
         if key not in payload:
             raise ValueError(f"Missing payload key: {key}")
     if len(payload["preface"]) != 2:
@@ -1799,10 +2005,6 @@ def validate_payload(payload: dict) -> None:
             raise ValueError("Settlement report amount is incorrect.")
         if int(settlement.get("total_amount", -1)) != expected_sample_amount + expected_report_amount:
             raise ValueError("Settlement total amount is incorrect.")
-    service_unit = payload.get("service", {}).get("unit", "")
-    disclaimer_unit = payload.get("disclaimer", {}).get("unit", "")
-    if service_unit and disclaimer_unit and service_unit != disclaimer_unit:
-        raise ValueError("Service unit and disclaimer unit must be identical.")
 
 
 def main() -> None:
